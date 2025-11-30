@@ -156,9 +156,9 @@ export class GameApp {
     if (!this.renderer) return;
 
     const demoTerrain = generateDemoMap();
+    // Map to TerrainHex format expected by terrain-layer (coord: { q, r })
     const terrainHexes: TerrainHex[] = demoTerrain.map((hex) => ({
-      q: hex.coord.q,
-      r: hex.coord.r,
+      coord: { q: hex.coord.q, r: hex.coord.r },
       type: hex.type,
     }));
 
@@ -244,8 +244,7 @@ export class GameApp {
 
     if (gameState.terrain && this.renderer) {
       const terrainHexes: TerrainHex[] = gameState.terrain.map((hex) => ({
-        q: hex.coord.q,
-        r: hex.coord.r,
+        coord: { q: hex.coord.q, r: hex.coord.r },
         type: hex.type,
       }));
       this.renderer.setTerrainData(terrainHexes);
