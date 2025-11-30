@@ -41,7 +41,8 @@ class SeededRandom {
 }
 
 /**
- * Generate a map with terrain types
+ * Generate a rectangular map with terrain types
+ * Creates a full rectangular grid that fills the screen properly
  */
 export function generateMap(config: Partial<MapConfig> = {}, seed?: number): HexTerrain[] {
   const cfg = { ...DEFAULT_CONFIG, ...config };
@@ -52,52 +53,51 @@ export function generateMap(config: Partial<MapConfig> = {}, seed?: number): Hex
   const centerQ = Math.floor(cfg.width / 2);
   const centerR = Math.floor(cfg.height / 2);
 
-  // Maximum distance from center (for island shape)
-  const maxRadius = Math.min(cfg.width, cfg.height) / 2;
+  // For rectangular maps, use elliptical distance based on map dimensions
+  const maxRadiusQ = cfg.width / 2;
+  const maxRadiusR = cfg.height / 2;
 
   for (let r = 0; r < cfg.height; r++) {
     for (let q = 0; q < cfg.width; q++) {
       const coord: HexCoord = { q, r };
 
-      // Calculate distance from center (using axial distance approximation)
-      const dq = q - centerQ;
-      const dr = r - centerR;
-      const distance = Math.sqrt(dq * dq + dr * dr + dq * dr);
-
-      // Normalize distance
-      const normalizedDistance = distance / maxRadius;
+      // Calculate normalized distance using elliptical formula
+      const dq = (q - centerQ) / maxRadiusQ;
+      const dr = (r - centerR) / maxRadiusR;
+      // Adjust for hex grid offset (odd/even row offset in axial)
+      const normalizedDistance = Math.sqrt(dq * dq + dr * dr);
 
       // Determine terrain type
       let type: TerrainType;
 
-      // Outer ring is always sea
-      if (normalizedDistance > 0.85) {
+      // Border hexes are sea (within 1 hex of edge)
+      const isEdge = q === 0 || q === cfg.width - 1 || r === 0 || r === cfg.height - 1;
+      const isNearEdge = q === 1 || q === cfg.width - 2 || r === 1 || r === cfg.height - 2;
+
+      if (isEdge) {
         type = TerrainType.Sea;
-      }
-      // Transition zone - mostly sea with some reef
-      else if (normalizedDistance > 0.70) {
+      } else if (isNearEdge) {
+        // Near edge - mostly sea with some reef
         const rand = rng.next();
-        if (rand < 0.3) {
+        if (rand < 0.4) {
           type = TerrainType.Reef;
         } else {
           type = TerrainType.Sea;
         }
-      }
-      // Coastal zone - mix of terrain
-      else if (normalizedDistance > 0.50) {
+      } else if (normalizedDistance > 0.75) {
+        // Coastal zone - mix of terrain
         const rand = rng.next();
-        if (rand < 0.15) {
+        if (rand < 0.20) {
           type = TerrainType.Sea;
-        } else if (rand < 0.30) {
+        } else if (rand < 0.35) {
           type = TerrainType.Reef;
-        } else if (rand < 0.50) {
+        } else if (rand < 0.55) {
           type = TerrainType.Marsh;
         } else {
           type = TerrainType.Land;
         }
-      }
-      // Interior - mostly land with some variation
-      else {
+      } else {
+        // Interior - mostly land with some variation
         const rand = rng.next();
         if (rand < cfg.mountainRatio!) {
           type = TerrainType.Mountain;

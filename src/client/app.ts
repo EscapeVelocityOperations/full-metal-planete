@@ -225,8 +225,9 @@ export class GameApp {
     const mapPixelHeight = maxY - minY + padding * 2;
 
     // Calculate zoom to fit entire map in viewport (use smaller of width/height fits)
-    const zoomX = rect.width / mapPixelWidth;
-    const zoomY = rect.height / mapPixelHeight;
+    // Use 95% of viewport to leave a small margin
+    const zoomX = (rect.width * 0.95) / mapPixelWidth;
+    const zoomY = (rect.height * 0.95) / mapPixelHeight;
     const zoom = Math.min(zoomX, zoomY);
 
     // Map center in world coordinates

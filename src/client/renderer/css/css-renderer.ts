@@ -73,6 +73,7 @@ export class CSSHexRenderer {
       height: 100%;
       overflow: hidden;
       background: #0a0a0a;
+      z-index: 0;
     `;
 
     // Create grid container (this will be transformed for pan/zoom)
