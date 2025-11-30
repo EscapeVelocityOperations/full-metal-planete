@@ -19,34 +19,10 @@ async function main() {
   });
 
   const params = new URLSearchParams(window.location.search);
-  const gameId = params.get('gameId');
-  const playerId = params.get('playerId');
-  const token = params.get('token');
-
-  if (!gameId || !playerId || !token) {
-    const errorMessage = document.createElement('div');
-    errorMessage.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(255, 0, 0, 0.9);
-      color: white;
-      padding: 30px;
-      border-radius: 8px;
-      font-size: 18px;
-      text-align: center;
-    `;
-    errorMessage.innerHTML = `
-      <h2>Missing Game Parameters</h2>
-      <p>Please provide: gameId, playerId, and token</p>
-      <p style="margin-top: 20px; font-size: 14px; opacity: 0.8;">
-        Example: ?gameId=xxx&playerId=yyy&token=zzz
-      </p>
-    `;
-    document.body.appendChild(errorMessage);
-    return;
-  }
+  // Use demo values if parameters not provided (for development/testing)
+  const gameId = params.get('gameId') || 'demo';
+  const playerId = params.get('playerId') || 'demo-player';
+  const token = params.get('token') || 'demo-token';
 
   try {
     const app = new GameApp(canvas, { gameId, playerId, token });

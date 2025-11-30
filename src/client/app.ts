@@ -4,6 +4,7 @@
 
 import { HexRenderer } from '@/client/renderer/renderer';
 import { TerrainHex } from '@/client/renderer/terrain-layer';
+import { HEX_SIZE } from '@/client/renderer/types';
 import { GameClient } from './game-client';
 import { HUD, type LobbyPlayer } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
@@ -46,26 +47,33 @@ export class GameApp {
   async initialize(): Promise<void> {
     this.hud.showLoading();
 
+    // Initialize renderer first
+    this.renderer = await HexRenderer.create(this.canvas);
+    console.log('Renderer initialized:', this.renderer.getBackend());
+
+    this.input = new InputHandler(this.canvas, this.renderer);
+    this.setupInputHandlers();
+
+    // Load placeholder terrain immediately so canvas isn't black
+    this.loadPlaceholderTerrain();
+
+    // Start render loop early so we can see the terrain
+    this.startRenderLoop();
+
+    // Try to connect to server (non-blocking for demo mode)
     try {
-      this.renderer = await HexRenderer.create(this.canvas);
-      console.log('Renderer initialized:', this.renderer.getBackend());
-
-      this.input = new InputHandler(this.canvas, this.renderer);
-      this.setupInputHandlers();
-
       await this.client.connect();
       console.log('Connected to game server');
 
-      // Load placeholder terrain immediately so canvas isn't black
-      this.loadPlaceholderTerrain();
+      // Fetch initial game status to get player list
+      await this.fetchGameStatus();
 
       this.hud.hideLoading();
       this.hud.showMessage('Connected! Waiting for players...', 2000);
     } catch (error) {
-      console.error('Failed to initialize:', error);
+      console.error('Failed to connect:', error);
       this.hud.hideLoading();
-      this.hud.showMessage('Failed to connect to game', 5000);
-      throw error;
+      this.hud.showMessage('Demo mode - server not connected', 3000);
     }
   }
 
@@ -150,10 +158,95 @@ export class GameApp {
   }
 
   /**
+   * Fetch initial game status from server
+   */
+  private async fetchGameStatus(): Promise<void> {
+    try {
+      // In development, fetch from backend directly
+      const isDev = import.meta.env.DEV;
+      const baseUrl = isDev ? 'http://localhost:3000' : '';
+
+      const response = await fetch(`${baseUrl}/api/games/${this.config.gameId}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch game status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Game status:', data);
+
+      // Update lobby players from API response
+      if (data.players) {
+        this.lobbyPlayers = data.players.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          isReady: p.isReady || false,
+        }));
+        this.hud.updatePlayerList(this.lobbyPlayers);
+      }
+
+      // If game is already in progress, enter game mode
+      if (data.state === 'playing' && data.gameState) {
+        this.handleGameStart(data.gameState);
+      }
+    } catch (error) {
+      console.error('Error fetching game status:', error);
+    }
+  }
+
+  /**
    * Load placeholder terrain for lobby display
    */
   private loadPlaceholderTerrain(): void {
     if (!this.renderer) return;
+
+    const rect = this.canvas.getBoundingClientRect();
+
+    // Map dimensions: 23 columns (q) x 37 rows (r)
+    const mapWidth = 23;
+    const mapHeight = 37;
+
+    // For flat-top hexes with axial coordinates:
+    // x = size * (3/2) * q
+    // y = size * (sqrt(3)/2 * q + sqrt(3) * r)
+    //
+    // Map bounds:
+    // - q ranges from 0 to 22
+    // - r ranges from 0 to 36
+    //
+    // Min position (q=0, r=0): x=0, y=0
+    // Max position (q=22, r=36): x = 30 * 1.5 * 22 = 990, y = 30 * (sqrt(3)/2 * 22 + sqrt(3) * 36) = ~2442
+    const maxQ = mapWidth - 1;
+    const maxR = mapHeight - 1;
+
+    const minX = 0;
+    const maxX = HEX_SIZE * 1.5 * maxQ;
+    const minY = 0;
+    const maxY = HEX_SIZE * (Math.sqrt(3) / 2 * maxQ + Math.sqrt(3) * maxR);
+
+    // Add padding for hex size (hexes extend beyond their center points)
+    const padding = HEX_SIZE * 1.2;
+    const mapPixelWidth = maxX - minX + padding * 2;
+    const mapPixelHeight = maxY - minY + padding * 2;
+
+    // Calculate zoom to fit entire map in viewport (use smaller of width/height fits)
+    const zoomX = rect.width / mapPixelWidth;
+    const zoomY = rect.height / mapPixelHeight;
+    const zoom = Math.min(zoomX, zoomY);
+
+    // Map center in world coordinates
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    // Set viewport: x,y is the world coordinate at screen center
+    // Camera at map center with zoom to fit entirely
+    this.renderer.setViewport({
+      width: rect.width,
+      height: rect.height,
+      x: centerX,
+      y: centerY,
+      zoom,
+    });
 
     const demoTerrain = generateDemoMap();
     // Map to TerrainHex format expected by terrain-layer (coord: { q, r })

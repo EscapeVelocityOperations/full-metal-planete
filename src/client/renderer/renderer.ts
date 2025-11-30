@@ -244,37 +244,26 @@ export class HexRenderer {
 
     const { device } = this.backend;
 
-    // Create orthographic projection matrix
-    const left = -this.viewport.width / 2;
-    const right = this.viewport.width / 2;
-    const bottom = -this.viewport.height / 2;
-    const top = this.viewport.height / 2;
+    // Calculate visible world area based on zoom
+    // zoom < 1 means we see MORE of the world (zoom out)
+    // zoom > 1 means we see LESS of the world (zoom in)
+    const visibleWidth = this.viewport.width / this.viewport.zoom;
+    const visibleHeight = this.viewport.height / this.viewport.zoom;
 
-    const projection = new Float32Array([
+    // Orthographic projection centered on camera position
+    // Note: Y is flipped (negative scale) to match screen coordinates (Y down)
+    const left = this.viewport.x - visibleWidth / 2;
+    const right = this.viewport.x + visibleWidth / 2;
+    const bottom = this.viewport.y + visibleHeight / 2; // Swapped for Y-flip
+    const top = this.viewport.y - visibleHeight / 2;    // Swapped for Y-flip
+
+    // Orthographic projection matrix (maps world coords to NDC)
+    const viewProjection = new Float32Array([
       2 / (right - left), 0, 0, 0,
-      0, 2 / (top - bottom), 0, 0,
+      0, 2 / (top - bottom), 0, 0,  // This will be negative, flipping Y
       0, 0, -1, 0,
       -(right + left) / (right - left), -(top + bottom) / (top - bottom), 0, 1,
     ]);
-
-    // Create view matrix (translation + zoom)
-    const view = new Float32Array([
-      this.viewport.zoom, 0, 0, 0,
-      0, this.viewport.zoom, 0, 0,
-      0, 0, 1, 0,
-      -this.viewport.x * this.viewport.zoom, -this.viewport.y * this.viewport.zoom, 0, 1,
-    ]);
-
-    // Combine into view-projection
-    const viewProjection = new Float32Array(16);
-    for (let i = 0; i < 4; i++) {
-      for (let j = 0; j < 4; j++) {
-        viewProjection[i * 4 + j] = 0;
-        for (let k = 0; k < 4; k++) {
-          viewProjection[i * 4 + j] += projection[i * 4 + k]! * view[k * 4 + j]!;
-        }
-      }
-    }
 
     // Write to uniform buffer
     const uniformData = new Float32Array(20); // 16 + 1 + 3 padding
@@ -321,7 +310,7 @@ export class HexRenderer {
     renderPass.setBindGroup(0, this.bindGroup);
     renderPass.setVertexBuffer(0, this.vertexBuffer);
     renderPass.setVertexBuffer(1, instanceBuffer);
-    renderPass.draw(6, this.terrainLayer.hexCount); // 6 vertices per hex, N instances
+    renderPass.draw(18, this.terrainLayer.hexCount); // 18 vertices per hex (6 triangles), N instances
 
     renderPass.end();
 

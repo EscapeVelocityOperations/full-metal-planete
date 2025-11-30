@@ -18,13 +18,17 @@ export const FLAT_TOP_DIRECTIONS: ReadonlyArray<HexCoord> = [
 ] as const;
 
 /**
- * Generate vertex positions for a flat-top hexagon
+ * Generate vertex positions for a flat-top hexagon as triangles
+ * Uses triangle-list topology: 6 triangles, each connecting center to two adjacent vertices
  * @param size - Hex size (distance from center to vertex)
- * @returns Array of 6 vertex positions [x, y]
+ * @returns Array of 18 vertex positions [x, y] (6 triangles * 3 vertices each)
  */
 export function generateHexVertices(size: number): Array<[number, number]> {
   const vertices: Array<[number, number]> = [];
+  const center: [number, number] = [0, 0];
 
+  // Generate corner vertices
+  const corners: Array<[number, number]> = [];
   for (let i = 0; i < 6; i++) {
     // Flat-top: vertices at 0°, 60°, 120°, 180°, 240°, 300°
     const angleDeg = 60 * i;
@@ -33,7 +37,15 @@ export function generateHexVertices(size: number): Array<[number, number]> {
     const x = size * Math.cos(angleRad);
     const y = size * Math.sin(angleRad);
 
-    vertices.push([x, y]);
+    corners.push([x, y]);
+  }
+
+  // Create 6 triangles from center to each edge
+  for (let i = 0; i < 6; i++) {
+    const nextI = (i + 1) % 6;
+    vertices.push(center);
+    vertices.push(corners[i]!);
+    vertices.push(corners[nextI]!);
   }
 
   return vertices;
