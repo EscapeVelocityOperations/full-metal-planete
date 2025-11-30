@@ -48,11 +48,12 @@ export function createServer() {
           return reply.code(401).send({ error: 'Invalid token' });
         }
 
-        if (gameId !== id) {
+        // Normalize for comparison (both should be lowercase now)
+        if (gameId.toLowerCase() !== id.toLowerCase()) {
           return reply.code(401).send({ error: 'Token mismatch' });
         }
 
-        const room = rooms.get(gameId);
+        const room = rooms.get(gameId.toLowerCase());
         if (!room) {
           return reply.code(404).send({ error: 'Game not found' });
         }
@@ -90,7 +91,8 @@ export function createServer() {
       return reply.status(400).send({ error: 'Player name is required' });
     }
 
-    const gameId = nanoid(6);
+    // Use lowercase for game IDs to avoid case-sensitivity issues
+    const gameId = nanoid(6).toLowerCase();
     const playerId = `p1-${nanoid(6)}`;
 
     const hostPlayer: Player = {
@@ -132,7 +134,8 @@ export function createServer() {
       return reply.status(400).send({ error: 'Player name is required' });
     }
 
-    const room = rooms.get(id);
+    // Normalize game ID to lowercase for case-insensitive lookup
+    const room = rooms.get(id.toLowerCase());
     if (!room) {
       return reply.status(404).send({ error: 'Game not found' });
     }
@@ -183,7 +186,8 @@ export function createServer() {
     Params: { id: string };
   }>('/api/games/:id', async (request, reply) => {
     const { id } = request.params;
-    const room = rooms.get(id);
+    // Normalize game ID to lowercase for case-insensitive lookup
+    const room = rooms.get(id.toLowerCase());
 
     if (!room) {
       return reply.status(404).send({ error: 'Game not found' });

@@ -2,7 +2,7 @@
  * Main application orchestrator for Full Metal Planète client
  */
 
-import { HexRenderer } from '@/client/renderer/renderer';
+import { createRenderer, type IHexRenderer, type RendererType } from '@/client/renderer/renderer-factory';
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { HEX_SIZE } from '@/client/renderer/types';
 import { GameClient } from './game-client';
@@ -19,7 +19,8 @@ export interface GameConfig {
 }
 
 export class GameApp {
-  private renderer: HexRenderer | null = null;
+  private renderer: IHexRenderer | null = null;
+  private rendererType: RendererType = 'css'; // Default to CSS renderer
   private client: GameClient;
   private hud: HUD;
   private input: InputHandler | null = null;
@@ -47,8 +48,8 @@ export class GameApp {
   async initialize(): Promise<void> {
     this.hud.showLoading();
 
-    // Initialize renderer first
-    this.renderer = await HexRenderer.create(this.canvas);
+    // Initialize renderer using factory (defaults to CSS, falls back from WebGPU if needed)
+    this.renderer = await createRenderer(this.canvas, this.rendererType);
     console.log('Renderer initialized:', this.renderer.getBackend());
 
     this.input = new InputHandler(this.canvas, this.renderer);

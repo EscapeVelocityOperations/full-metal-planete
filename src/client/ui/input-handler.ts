@@ -3,7 +3,7 @@
  */
 
 import type { HexCoord } from '@/shared/game/types';
-import { HexRenderer } from '@/client/renderer/renderer';
+import type { IHexRenderer } from '@/client/renderer/renderer-factory';
 
 export interface InputEvents {
   hexClick: (coord: HexCoord) => void;
@@ -16,10 +16,10 @@ export interface InputEvents {
 export class InputHandler {
   private listeners: Map<keyof InputEvents, Set<Function>> = new Map();
   private canvas: HTMLCanvasElement;
-  private renderer: HexRenderer;
+  private renderer: IHexRenderer;
   private hoveredHex: HexCoord | null = null;
 
-  constructor(canvas: HTMLCanvasElement, renderer: HexRenderer) {
+  constructor(canvas: HTMLCanvasElement, renderer: IHexRenderer) {
     this.canvas = canvas;
     this.renderer = renderer;
     this.setupEventListeners();
