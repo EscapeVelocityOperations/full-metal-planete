@@ -3,8 +3,42 @@
  */
 
 import { GameApp } from './app';
+import { HomePage } from './ui/home-page';
 
-async function main() {
+/**
+ * Determine which page to show based on URL
+ */
+function getRoute(): 'home' | 'game' {
+  const params = new URLSearchParams(window.location.search);
+  const hasGameParams = params.has('gameId') && params.has('playerId') && params.has('token');
+  const isGamePath = window.location.pathname === '/game';
+
+  return (hasGameParams || isGamePath) ? 'game' : 'home';
+}
+
+/**
+ * Show the home page
+ */
+function showHomePage(): void {
+  const homePage = document.getElementById('home-page');
+  const gameContainer = document.getElementById('game-container');
+
+  if (homePage) homePage.classList.remove('hidden');
+  if (gameContainer) gameContainer.classList.add('hidden');
+
+  new HomePage();
+}
+
+/**
+ * Show the game page
+ */
+async function showGamePage(): Promise<void> {
+  const homePage = document.getElementById('home-page');
+  const gameContainer = document.getElementById('game-container');
+
+  if (homePage) homePage.classList.add('hidden');
+  if (gameContainer) gameContainer.classList.remove('hidden');
+
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   if (!canvas) {
     throw new Error('Canvas element not found');
@@ -19,10 +53,15 @@ async function main() {
   });
 
   const params = new URLSearchParams(window.location.search);
-  // Use demo values if parameters not provided (for development/testing)
-  const gameId = params.get('gameId') || 'demo';
-  const playerId = params.get('playerId') || 'demo-player';
-  const token = params.get('token') || 'demo-token';
+  const gameId = params.get('gameId')!;
+  const playerId = params.get('playerId')!;
+  const token = params.get('token')!;
+
+  // Update game ID display in HUD
+  const gameIdEl = document.getElementById('game-id-value');
+  if (gameIdEl) {
+    gameIdEl.textContent = gameId.toUpperCase();
+  }
 
   try {
     const app = new GameApp(canvas, { gameId, playerId, token });
@@ -55,6 +94,16 @@ async function main() {
       <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
     `;
     document.body.appendChild(errorMessage);
+  }
+}
+
+async function main() {
+  const route = getRoute();
+
+  if (route === 'home') {
+    showHomePage();
+  } else {
+    await showGamePage();
   }
 }
 

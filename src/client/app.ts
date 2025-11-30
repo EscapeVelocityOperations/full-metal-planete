@@ -202,20 +202,13 @@ export class GameApp {
 
     const rect = this.canvas.getBoundingClientRect();
 
-    // Map dimensions: 23 columns (q) x 37 rows (r)
-    const mapWidth = 23;
-    const mapHeight = 37;
+    // Map dimensions: 21 columns (q) x 13 rows (r) - approximately 15:10 ratio
+    const mapWidth = 21;
+    const mapHeight = 13;
 
     // For flat-top hexes with axial coordinates:
     // x = size * (3/2) * q
     // y = size * (sqrt(3)/2 * q + sqrt(3) * r)
-    //
-    // Map bounds:
-    // - q ranges from 0 to 22
-    // - r ranges from 0 to 36
-    //
-    // Min position (q=0, r=0): x=0, y=0
-    // Max position (q=22, r=36): x = 30 * 1.5 * 22 = 990, y = 30 * (sqrt(3)/2 * 22 + sqrt(3) * 36) = ~2442
     const maxQ = mapWidth - 1;
     const maxR = mapHeight - 1;
 
