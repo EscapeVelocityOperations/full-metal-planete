@@ -1,0 +1,59 @@
+{
+  "name": "fmp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "author": "Eric Cestari <eric@escapevelocity.fr>",
+  "license": "MIT",
+  "description": "Full Metal Planète - Backend sync service",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "tsx --watch src/server/index.ts",
+    "dev:server": "tsx --watch src/server/index.ts",
+    "dev:client": "vite",
+    "build": "tsc",
+    "build:server": "tsc",
+    "build:client": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:headed": "playwright test --headed"
+  },
+  "keywords": [
+    "game",
+    "websocket",
+    "redis",
+    "multiplayer"
+  ],
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/websocket": "^10.0.1",
+    "fastify": "^4.28.1",
+    "ioredis": "^5.4.1",
+    "nanoid": "^5.0.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.5.10",
+    "@typescript-eslint/eslint-plugin": "^8.48.0",
+    "@typescript-eslint/parser": "^8.48.0",
+    "@vitest/coverage-v8": "^4.0.14",
+    "@vitest/ui": "^4.0.14",
+    "@webgpu/types": "^0.1.66",
+    "eslint": "^9.39.1",
+    "happy-dom": "^20.0.11",
+    "ioredis-mock": "^8.9.0",
+    "playwright": "^1.57.0",
+    "tsx": "^4.15.7",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.14",
+    "ws": "^8.17.1"
+  }
+}
