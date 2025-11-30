@@ -57,10 +57,10 @@ async function showGamePage(): Promise<void> {
   const playerId = params.get('playerId')!;
   const token = params.get('token')!;
 
-  // Update game ID display in HUD
+  // Update game ID display in HUD (keep original case for copy/paste accuracy)
   const gameIdEl = document.getElementById('game-id-value');
   if (gameIdEl) {
-    gameIdEl.textContent = gameId.toUpperCase();
+    gameIdEl.textContent = gameId;
   }
 
   try {

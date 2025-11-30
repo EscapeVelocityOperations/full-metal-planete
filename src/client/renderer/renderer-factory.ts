@@ -17,6 +17,7 @@ export interface IHexRenderer {
   render(): void;
   getCapabilities(): RendererCapabilities;
   getBackend(): RendererBackend;
+  getViewportSize(): { width: number; height: number };
   destroy(): void;
 }
 
@@ -107,6 +108,10 @@ export class RendererAdapter implements IHexRenderer {
 
   getBackend(): RendererBackend {
     return this.renderer.getBackend();
+  }
+
+  getViewportSize(): { width: number; height: number } {
+    return this.renderer.getViewportSize();
   }
 
   destroy(): void {

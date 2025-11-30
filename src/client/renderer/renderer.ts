@@ -334,6 +334,17 @@ export class HexRenderer {
   }
 
   /**
+   * Get the current viewport size
+   * @returns Viewport dimensions
+   */
+  getViewportSize(): { width: number; height: number } {
+    return {
+      width: this.viewport.width,
+      height: this.viewport.height,
+    };
+  }
+
+  /**
    * Clean up GPU resources
    */
   destroy(): void {

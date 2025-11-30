@@ -16,8 +16,8 @@ export interface MapConfig {
 }
 
 const DEFAULT_CONFIG: MapConfig = {
-  width: 21,   // Columns (q direction) - roughly 15:10 ratio when rendered
-  height: 13,  // Rows (r direction)
+  width: 27,   // Columns (q direction) - wider for 16:9/16:10 screens
+  height: 11,  // Rows (r direction) - fewer rows for rectangular fit
   seaRatio: 0.30,
   mountainRatio: 0.08,
   marshRatio: 0.10,
@@ -117,10 +117,10 @@ export function generateMap(config: Partial<MapConfig> = {}, seed?: number): Hex
 
 /**
  * Generate a simple demo map for testing
- * Uses 21x13 grid for approximately 15:10 aspect ratio
+ * Uses 27x11 grid for better fit on widescreen displays (16:9, 16:10)
  */
 export function generateDemoMap(): HexTerrain[] {
-  return generateMap({ width: 21, height: 13 }, 12345);
+  return generateMap({ width: 27, height: 11 }, 12345);
 }
 
 /**

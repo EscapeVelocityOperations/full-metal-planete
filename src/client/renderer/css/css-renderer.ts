@@ -287,6 +287,16 @@ export class CSSHexRenderer {
   }
 
   /**
+   * Get the actual viewport size from the container
+   */
+  getViewportSize(): { width: number; height: number } {
+    return {
+      width: this.container.clientWidth || 800,
+      height: this.container.clientHeight || 600,
+    };
+  }
+
+  /**
    * Get hex element at coordinates
    */
   getHexElement(q: number, r: number): HTMLDivElement | undefined {

@@ -75,11 +75,11 @@ test.describe('Full Metal Planète - Game Flow', () => {
     test('should load client without game params', async ({ page }) => {
       await page.goto('/');
 
-      // Should show error or prompt for game ID
-      await expect(page.locator('body')).toBeVisible();
+      // Should show home page with game creation options
+      await expect(page.locator('h1')).toContainText('FULL METAL PLANETE');
     });
 
-    test('should display game canvas when joining', async ({ page, request }) => {
+    test('should display game renderer when joining', async ({ page, request }) => {
       // Create game via API
       const createResponse = await request.post('http://localhost:3000/api/games', {
         data: { playerName: 'E2EPlayer' }
@@ -89,9 +89,9 @@ test.describe('Full Metal Planète - Game Flow', () => {
       // Navigate to client with game params
       await page.goto(`/?gameId=${gameId}&playerId=${playerId}&token=${playerToken}`);
 
-      // Wait for canvas to be visible
-      const canvas = page.locator('#game-canvas');
-      await expect(canvas).toBeVisible({ timeout: 10000 });
+      // Wait for CSS renderer container to be visible (CSS renderer hides canvas)
+      const renderer = page.locator('.css-hex-renderer');
+      await expect(renderer).toBeVisible({ timeout: 10000 });
     });
 
     test('should display HUD elements', async ({ page, request }) => {
@@ -124,8 +124,8 @@ test.describe('Full Metal Planète - Game Flow', () => {
 
       await page.goto(`/?gameId=${gameId}&playerId=${playerId}&token=${playerToken}`);
 
-      // Wait for canvas and HUD (indicates successful load and WS connection)
-      await page.waitForSelector('#game-canvas', { timeout: 10000 });
+      // Wait for CSS renderer and HUD (indicates successful load and WS connection)
+      await page.waitForSelector('.css-hex-renderer', { timeout: 10000 });
       await page.waitForSelector('#hud', { timeout: 10000 });
 
       // Verify HUD is visible (connection established)
@@ -160,13 +160,13 @@ test.describe('Full Metal Planète - Game Flow', () => {
         await page1.goto(`http://localhost:5173/?gameId=${game1.gameId}&playerId=${game1.playerId}&token=${game1.playerToken}`);
         await page2.goto(`http://localhost:5173/?gameId=${game2.gameId}&playerId=${game2.playerId}&token=${game2.playerToken}`);
 
-        // Wait for both to load
-        await page1.waitForSelector('#game-canvas', { timeout: 10000 });
-        await page2.waitForSelector('#game-canvas', { timeout: 10000 });
+        // Wait for both to load (CSS renderer hides canvas)
+        await page1.waitForSelector('.css-hex-renderer', { timeout: 10000 });
+        await page2.waitForSelector('.css-hex-renderer', { timeout: 10000 });
 
         // Both should see the game
-        await expect(page1.locator('#game-canvas')).toBeVisible();
-        await expect(page2.locator('#game-canvas')).toBeVisible();
+        await expect(page1.locator('.css-hex-renderer')).toBeVisible();
+        await expect(page2.locator('.css-hex-renderer')).toBeVisible();
       } finally {
         await context1.close();
         await context2.close();

@@ -201,11 +201,12 @@ export class GameApp {
   private loadPlaceholderTerrain(): void {
     if (!this.renderer) return;
 
-    const rect = this.canvas.getBoundingClientRect();
+    // Use renderer's viewport size (handles both WebGPU canvas and CSS container)
+    const rect = this.renderer.getViewportSize();
 
-    // Map dimensions: 21 columns (q) x 13 rows (r) - approximately 15:10 ratio
-    const mapWidth = 21;
-    const mapHeight = 13;
+    // Map dimensions: 27 columns (q) x 11 rows (r) - better fit for widescreen (16:9, 16:10)
+    const mapWidth = 27;
+    const mapHeight = 11;
 
     // For flat-top hexes with axial coordinates:
     // x = size * (3/2) * q
