@@ -16,6 +16,7 @@ export interface GameClientEvents {
   disconnected: () => void;
   playerJoined: (player: any) => void;
   playerLeft: (playerId: string) => void;
+  playerReady: (playerId: string) => void;
   gameStart: (gameState: GameState) => void;
   action: (action: GameAction) => void;
   turnEnd: (data: { playerId: string; savedAP: number }) => void;
@@ -102,6 +103,10 @@ export class GameClient {
 
         case 'PLAYER_LEFT':
           this.emit('playerLeft', message.payload.playerId);
+          break;
+
+        case 'PLAYER_READY':
+          this.emit('playerReady', message.payload.playerId);
           break;
 
         case 'GAME_START':

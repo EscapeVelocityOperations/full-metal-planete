@@ -5,10 +5,11 @@
 import { HexRenderer } from '@/client/renderer/renderer';
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { GameClient } from './game-client';
-import { HUD } from './ui/hud';
+import { HUD, type LobbyPlayer } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import type { GameState, HexCoord, Unit, MoveAction, TideLevel } from '@/shared/game/types';
 import { hexKey } from '@/shared/game/hex';
+import { generateDemoMap } from '@/shared/game/map-generator';
 
 export interface GameConfig {
   gameId: string;
@@ -22,13 +23,17 @@ export class GameApp {
   private hud: HUD;
   private input: InputHandler | null = null;
   private canvas: HTMLCanvasElement;
+  private config: GameConfig;
 
   private gameState: GameState | null = null;
   private selectedUnit: Unit | null = null;
   private isMyTurn: boolean = false;
+  private lobbyPlayers: LobbyPlayer[] = [];
+  private isInLobby: boolean = true;
 
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
+    this.config = config;
     this.client = new GameClient(config.gameId, config.playerId, config.token);
     this.hud = new HUD();
 
@@ -51,8 +56,11 @@ export class GameApp {
       await this.client.connect();
       console.log('Connected to game server');
 
+      // Load placeholder terrain immediately so canvas isn't black
+      this.loadPlaceholderTerrain();
+
       this.hud.hideLoading();
-      this.hud.showMessage('Connected to game', 2000);
+      this.hud.showMessage('Connected! Waiting for players...', 2000);
     } catch (error) {
       console.error('Failed to initialize:', error);
       this.hud.hideLoading();
@@ -72,6 +80,21 @@ export class GameApp {
     this.client.on('disconnected', () => {
       console.log('Game client disconnected');
       this.hud.showMessage('Disconnected from server', 5000);
+    });
+
+    this.client.on('playerJoined', (player: any) => {
+      console.log('Player joined:', player);
+      this.handlePlayerJoined(player);
+    });
+
+    this.client.on('playerLeft', (playerId: string) => {
+      console.log('Player left:', playerId);
+      this.handlePlayerLeft(playerId);
+    });
+
+    this.client.on('playerReady', (playerId: string) => {
+      console.log('Player ready:', playerId);
+      this.handlePlayerReady(playerId);
     });
 
     this.client.on('gameStart', (gameState: GameState) => {
@@ -96,6 +119,10 @@ export class GameApp {
 
     this.hud.onEndTurn(() => {
       this.handleEndTurn();
+    });
+
+    this.hud.onReady(() => {
+      this.handleReady();
     });
   }
 
@@ -123,10 +150,86 @@ export class GameApp {
   }
 
   /**
+   * Load placeholder terrain for lobby display
+   */
+  private loadPlaceholderTerrain(): void {
+    if (!this.renderer) return;
+
+    const demoTerrain = generateDemoMap();
+    const terrainHexes: TerrainHex[] = demoTerrain.map((hex) => ({
+      q: hex.coord.q,
+      r: hex.coord.r,
+      type: hex.type,
+    }));
+
+    this.renderer.setTerrainData(terrainHexes);
+    this.renderer.setTide('normal');
+    this.render();
+  }
+
+  /**
+   * Handle ready button click
+   */
+  private handleReady(): void {
+    this.client.sendReady();
+    this.hud.showMessage('Ready! Waiting for other players...', 2000);
+  }
+
+  /**
+   * Handle player joined event
+   */
+  private handlePlayerJoined(player: any): void {
+    const lobbyPlayer: LobbyPlayer = {
+      id: player.id,
+      name: player.name,
+      color: player.color,
+      isReady: player.isReady || false,
+    };
+
+    // Check if player already exists (reconnect)
+    const existingIndex = this.lobbyPlayers.findIndex(p => p.id === player.id);
+    if (existingIndex >= 0) {
+      this.lobbyPlayers[existingIndex] = lobbyPlayer;
+    } else {
+      this.lobbyPlayers.push(lobbyPlayer);
+    }
+
+    this.hud.updatePlayerList(this.lobbyPlayers);
+    this.hud.showMessage(`${player.name} joined!`, 2000);
+  }
+
+  /**
+   * Handle player left event
+   */
+  private handlePlayerLeft(playerId: string): void {
+    const player = this.lobbyPlayers.find(p => p.id === playerId);
+    this.lobbyPlayers = this.lobbyPlayers.filter(p => p.id !== playerId);
+    this.hud.updatePlayerList(this.lobbyPlayers);
+
+    if (player) {
+      this.hud.showMessage(`${player.name} left`, 2000);
+    }
+  }
+
+  /**
+   * Handle player ready event
+   */
+  private handlePlayerReady(playerId: string): void {
+    const player = this.lobbyPlayers.find(p => p.id === playerId);
+    if (player) {
+      player.isReady = true;
+      this.hud.updatePlayerList(this.lobbyPlayers);
+      this.hud.showMessage(`${player.name} is ready!`, 2000);
+    }
+  }
+
+  /**
    * Handle game start
    */
   private handleGameStart(gameState: GameState): void {
+    this.isInLobby = false;
     this.gameState = gameState;
+    this.hud.enterGameMode();
     this.updateGameState(gameState);
     this.hud.showMessage('Game started!', 3000);
   }

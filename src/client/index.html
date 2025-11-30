@@ -81,9 +81,8 @@
         color: #44ff44;
       }
 
-      #end-turn-btn {
+      .action-btn {
         padding: 12px 24px;
-        background: #4a90e2;
         border: none;
         color: white;
         font-size: 16px;
@@ -93,14 +92,59 @@
         transition: background 0.2s;
       }
 
+      #end-turn-btn {
+        background: #4a90e2;
+      }
+
       #end-turn-btn:hover {
         background: #357abd;
       }
 
-      #end-turn-btn:disabled {
+      #ready-btn {
+        background: #44aa44;
+      }
+
+      #ready-btn:hover {
+        background: #338833;
+      }
+
+      #ready-btn.ready {
+        background: #888;
+      }
+
+      .action-btn:disabled {
         background: #333;
         cursor: not-allowed;
         opacity: 0.5;
+      }
+
+      .lobby-status {
+        text-align: center;
+        margin-bottom: 10px;
+        font-size: 14px;
+        color: #aaa;
+      }
+
+      .player-list {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .player-badge {
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+
+      .player-badge.red { background: #c44; }
+      .player-badge.blue { background: #44c; }
+      .player-badge.green { background: #4a4; }
+      .player-badge.yellow { background: #cc4; color: #333; }
+
+      .player-badge.ready::after {
+        content: ' ✓';
       }
 
       #status-message {
@@ -197,8 +241,12 @@
             <div class="hud-value" id="timer-value">3:00</div>
           </div>
         </div>
-        <div class="hud-section">
-          <button id="end-turn-btn">End Turn</button>
+        <div class="hud-section" id="lobby-section">
+          <div class="player-list" id="player-list"></div>
+          <button id="ready-btn" class="action-btn">Ready</button>
+        </div>
+        <div class="hud-section" id="game-section" style="display: none;">
+          <button id="end-turn-btn" class="action-btn">End Turn</button>
         </div>
       </div>
 

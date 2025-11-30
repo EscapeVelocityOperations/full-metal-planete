@@ -4,15 +4,27 @@
 
 import type { TideLevel } from '@/shared/game/types';
 
+export interface LobbyPlayer {
+  id: string;
+  name: string;
+  color: string;
+  isReady: boolean;
+}
+
 export class HUD {
   private apValueEl: HTMLElement;
   private turnValueEl: HTMLElement;
   private tideValueEl: HTMLElement;
   private timerValueEl: HTMLElement;
   private endTurnBtn: HTMLButtonElement;
+  private readyBtn: HTMLButtonElement;
+  private lobbySectionEl: HTMLElement;
+  private gameSectionEl: HTMLElement;
+  private playerListEl: HTMLElement;
   private statusMessageEl: HTMLElement;
   private timerInterval: number | null = null;
   private turnEndTime: number = 0;
+  private isReady: boolean = false;
 
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
@@ -20,6 +32,10 @@ export class HUD {
     this.tideValueEl = document.getElementById('tide-value')!;
     this.timerValueEl = document.getElementById('timer-value')!;
     this.endTurnBtn = document.getElementById('end-turn-btn') as HTMLButtonElement;
+    this.readyBtn = document.getElementById('ready-btn') as HTMLButtonElement;
+    this.lobbySectionEl = document.getElementById('lobby-section')!;
+    this.gameSectionEl = document.getElementById('game-section')!;
+    this.playerListEl = document.getElementById('player-list')!;
     this.statusMessageEl = document.getElementById('status-message')!;
   }
 
@@ -131,6 +147,52 @@ export class HUD {
    */
   onEndTurn(callback: () => void): void {
     this.endTurnBtn.addEventListener('click', callback);
+  }
+
+  /**
+   * Set ready button click handler
+   */
+  onReady(callback: () => void): void {
+    this.readyBtn.addEventListener('click', () => {
+      if (!this.isReady) {
+        this.isReady = true;
+        this.readyBtn.textContent = 'Ready!';
+        this.readyBtn.classList.add('ready');
+        this.readyBtn.disabled = true;
+        callback();
+      }
+    });
+  }
+
+  /**
+   * Update the player list in lobby
+   */
+  updatePlayerList(players: LobbyPlayer[]): void {
+    this.playerListEl.innerHTML = '';
+    players.forEach(player => {
+      const badge = document.createElement('span');
+      badge.className = `player-badge ${player.color}`;
+      if (player.isReady) {
+        badge.classList.add('ready');
+      }
+      badge.textContent = player.name;
+      this.playerListEl.appendChild(badge);
+    });
+  }
+
+  /**
+   * Switch from lobby mode to game mode
+   */
+  enterGameMode(): void {
+    this.lobbySectionEl.style.display = 'none';
+    this.gameSectionEl.style.display = 'flex';
+  }
+
+  /**
+   * Check if in lobby mode
+   */
+  isLobbyMode(): boolean {
+    return this.lobbySectionEl.style.display !== 'none';
   }
 
   /**
