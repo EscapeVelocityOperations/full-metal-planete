@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <defs>
+    <pattern id="grass" patternUnits="userSpaceOnUse" width="8" height="8">
+      <circle cx="2" cy="2" r="0.5" fill="#C49A64" opacity="0.4"/>
+      <circle cx="6" cy="6" r="0.5" fill="#C49A64" opacity="0.4"/>
+    </pattern>
+  </defs>
+  <!-- Flat-top hex shape -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#D4A574"/>
+  <!-- Grass texture -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="url(#grass)"/>
+  <!-- Border -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#C49A64" stroke-width="0.5"/>
+</svg>

@@ -14,6 +14,19 @@ import {
   TerrainType,
   TERRAIN_COLORS,
 } from '../types';
+import type { Unit, PlayerColor } from '@/shared/game/types';
+import { UnitType, PlayerColor as PlayerColorEnum } from '@/shared/game/types';
+
+// Zoom configuration
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 2.5;
+const ZOOM_STEP = 0.1;
+
+// Safari/WebKit GestureEvent interface (not in standard DOM types)
+interface GestureEvent extends UIEvent {
+  scale: number;
+  rotation: number;
+}
 
 // CSS color helpers
 function rgbToHex(r: number, g: number, b: number): string {
@@ -49,20 +62,46 @@ function getTerrainColorHex(terrainType: TerrainType, tide: TideLevel): string {
   return rgbToHex(color[0], color[1], color[2]);
 }
 
+// Unit type to symbol mapping
+const UNIT_SYMBOLS: Record<UnitType, string> = {
+  [UnitType.Astronef]: '\u25C6', // Diamond
+  [UnitType.Tower]: '\u25B2', // Triangle up
+  [UnitType.Tank]: '\u25A0', // Square
+  [UnitType.SuperTank]: '\u25A0\u25A0', // Double square
+  [UnitType.MotorBoat]: '\u25BA', // Triangle right
+  [UnitType.Barge]: '\u25AC', // Rectangle
+  [UnitType.Crab]: '\u2739', // Star
+  [UnitType.Converter]: '\u25CE', // Bullseye
+  [UnitType.Bridge]: '\u2550', // Double horizontal
+};
+
+// Player color to CSS color mapping
+const PLAYER_COLORS: Record<string, string> = {
+  red: '#ff4444',
+  blue: '#4444ff',
+  green: '#44ff44',
+  yellow: '#ffff44',
+};
+
 /**
  * CSS-based hex renderer using DOM elements
  */
 export class CSSHexRenderer {
   private container: HTMLDivElement;
   private gridContainer: HTMLDivElement;
+  private unitsContainer: HTMLDivElement;
   private terrainHexes: TerrainHex[] = [];
   private hexElements: Map<string, HTMLDivElement> = new Map();
+  private units: Unit[] = [];
+  private unitElements: Map<string, HTMLDivElement> = new Map();
   private currentTide: TideLevel = TideLevel.Normal;
   private viewport: Viewport;
   private useSpriteMode: boolean = false;
+  private mapBounds: { minX: number; minY: number; maxX: number; maxY: number } = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private zoomChangeCallbacks: Set<(zoom: number) => void> = new Set();
 
   constructor(parentElement: HTMLElement) {
-    // Create main container
+    // Create main container with scrollbars
     this.container = document.createElement('div');
     this.container.className = 'css-hex-renderer';
     this.container.style.cssText = `
@@ -71,19 +110,32 @@ export class CSSHexRenderer {
       left: 0;
       width: 100%;
       height: 100%;
-      overflow: hidden;
+      overflow: auto;
       background: #0a0a0a;
       z-index: 0;
     `;
 
-    // Create grid container (this will be transformed for pan/zoom)
+    // Create grid container (this will be scaled for zoom)
     this.gridContainer = document.createElement('div');
     this.gridContainer.className = 'hex-grid';
     this.gridContainer.style.cssText = `
-      position: absolute;
-      transform-origin: center center;
+      position: relative;
+      transform-origin: 0 0;
       will-change: transform;
     `;
+
+    // Create units container (sits on top of hex grid)
+    this.unitsContainer = document.createElement('div');
+    this.unitsContainer.className = 'units-layer';
+    this.unitsContainer.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    `;
+    this.gridContainer.appendChild(this.unitsContainer);
 
     this.container.appendChild(this.gridContainer);
     parentElement.appendChild(this.container);
@@ -99,6 +151,9 @@ export class CSSHexRenderer {
 
     // Inject CSS styles for hexagons
     this.injectStyles();
+
+    // Set up gesture-based zoom (pinch for trackpad/touch, scrollbars for panning)
+    this.setupGestureZoom();
   }
 
   /**
@@ -139,6 +194,30 @@ export class CSSHexRenderer {
         color: rgba(255, 255, 255, 0.5);
         pointer-events: none;
       }
+
+      .unit-marker {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        font-weight: bold;
+        text-shadow:
+          1px 1px 2px rgba(0,0,0,0.8),
+          -1px -1px 2px rgba(0,0,0,0.8),
+          1px -1px 2px rgba(0,0,0,0.8),
+          -1px 1px 2px rgba(0,0,0,0.8);
+        pointer-events: none;
+        z-index: 10;
+      }
+
+      .unit-marker.astronef {
+        font-size: 32px;
+      }
+
+      .unit-marker.tower {
+        font-size: 20px;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -154,19 +233,174 @@ export class CSSHexRenderer {
   }
 
   /**
+   * Set up gesture-based zoom (pinch-to-zoom for trackpad/touch)
+   * Two-finger scrolling is handled natively by overflow:auto
+   */
+  private setupGestureZoom(): void {
+    // Track touch points for pinch-to-zoom
+    let initialPinchDistance = 0;
+    let initialZoom = 1;
+
+    // Safari/macOS trackpad gesture events (gesturestart, gesturechange, gestureend)
+    this.container.addEventListener('gesturestart', ((event: GestureEvent) => {
+      event.preventDefault();
+      initialZoom = this.viewport.zoom;
+    }) as EventListener);
+
+    this.container.addEventListener('gesturechange', ((event: GestureEvent) => {
+      event.preventDefault();
+      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom * event.scale));
+
+      if (newZoom !== this.viewport.zoom) {
+        this.viewport.zoom = newZoom;
+        this.updateViewport();
+        this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
+      }
+    }) as EventListener);
+
+    this.container.addEventListener('gestureend', ((event: GestureEvent) => {
+      event.preventDefault();
+    }) as EventListener);
+
+    // Touch events for mobile pinch-to-zoom
+    this.container.addEventListener('touchstart', (event: TouchEvent) => {
+      if (event.touches.length === 2) {
+        // Calculate initial distance between two fingers
+        const dx = event.touches[0].clientX - event.touches[1].clientX;
+        const dy = event.touches[0].clientY - event.touches[1].clientY;
+        initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+        initialZoom = this.viewport.zoom;
+      }
+    }, { passive: true });
+
+    this.container.addEventListener('touchmove', (event: TouchEvent) => {
+      if (event.touches.length === 2 && initialPinchDistance > 0) {
+        // Calculate current distance between two fingers
+        const dx = event.touches[0].clientX - event.touches[1].clientX;
+        const dy = event.touches[0].clientY - event.touches[1].clientY;
+        const currentDistance = Math.sqrt(dx * dx + dy * dy);
+
+        // Calculate zoom scale based on pinch ratio
+        const scale = currentDistance / initialPinchDistance;
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom * scale));
+
+        if (newZoom !== this.viewport.zoom) {
+          this.viewport.zoom = newZoom;
+          this.updateViewport();
+          this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
+        }
+      }
+    }, { passive: true });
+
+    this.container.addEventListener('touchend', () => {
+      initialPinchDistance = 0;
+    }, { passive: true });
+  }
+
+  /**
    * Set terrain data for rendering
    */
   setTerrainData(terrainHexes: TerrainHex[]): void {
     this.terrainHexes = terrainHexes;
+    this.calculateMapBounds();
     this.rebuildGrid();
+  }
+
+  /**
+   * Set units for rendering
+   */
+  setUnits(units: Unit[]): void {
+    this.units = units;
+    console.log('CSSHexRenderer.setUnits called with', units.length, 'units');
+    this.rebuildUnits();
+  }
+
+  /**
+   * Rebuild the unit layer
+   */
+  private rebuildUnits(): void {
+    // Clear existing unit elements
+    this.unitsContainer.innerHTML = '';
+    this.unitElements.clear();
+
+    // Create unit elements
+    for (const unit of this.units) {
+      const element = this.createUnitElement(unit);
+      this.unitElements.set(unit.id, element);
+      this.unitsContainer.appendChild(element);
+    }
+  }
+
+  /**
+   * Create a single unit element
+   */
+  private createUnitElement(unit: Unit): HTMLDivElement {
+    const element = document.createElement('div');
+    element.className = `unit-marker ${unit.type}`;
+    element.dataset.unitId = unit.id;
+    element.dataset.unitType = unit.type;
+    element.dataset.owner = unit.owner;
+
+    // Get symbol and color
+    const symbol = UNIT_SYMBOLS[unit.type] || '?';
+    // Extract player color from owner (e.g., "player-red" -> "red")
+    const ownerColor = unit.owner.replace('player-', '');
+    const color = PLAYER_COLORS[ownerColor] || '#ffffff';
+
+    element.textContent = symbol;
+    element.style.color = color;
+
+    // Calculate pixel position
+    const pos = axialToPixel(unit.position.q, unit.position.r, HEX_SIZE);
+
+    // Position the unit at hex center
+    const hexWidth = HEX_SIZE * 2;
+    const hexHeight = HEX_SIZE * Math.sqrt(3);
+    element.style.left = `${pos.x - hexWidth / 2}px`;
+    element.style.top = `${pos.y - hexHeight / 2}px`;
+    element.style.width = `${hexWidth}px`;
+    element.style.height = `${hexHeight}px`;
+
+    return element;
+  }
+
+  /**
+   * Calculate the bounding box of the map in pixel coordinates
+   */
+  private calculateMapBounds(): void {
+    if (this.terrainHexes.length === 0) {
+      this.mapBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      return;
+    }
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const hexWidth = HEX_SIZE * 2;
+    const hexHeight = HEX_SIZE * Math.sqrt(3);
+
+    for (const hex of this.terrainHexes) {
+      const pos = axialToPixel(hex.coord.q, hex.coord.r, HEX_SIZE);
+      minX = Math.min(minX, pos.x - hexWidth / 2);
+      minY = Math.min(minY, pos.y - hexHeight / 2);
+      maxX = Math.max(maxX, pos.x + hexWidth / 2);
+      maxY = Math.max(maxY, pos.y + hexHeight / 2);
+    }
+
+    // Add padding
+    const padding = HEX_SIZE;
+    this.mapBounds = {
+      minX: minX - padding,
+      minY: minY - padding,
+      maxX: maxX + padding,
+      maxY: maxY + padding,
+    };
   }
 
   /**
    * Rebuild the entire hex grid
    */
   private rebuildGrid(): void {
-    // Clear existing elements
-    this.gridContainer.innerHTML = '';
+    // Clear existing hex elements (but preserve unitsContainer)
+    this.hexElements.forEach((el) => el.remove());
     this.hexElements.clear();
 
     // Create hex elements
@@ -174,7 +408,8 @@ export class CSSHexRenderer {
       const element = this.createHexElement(hex);
       const key = `${hex.coord.q},${hex.coord.r}`;
       this.hexElements.set(key, element);
-      this.gridContainer.appendChild(element);
+      // Insert before unitsContainer so units render on top
+      this.gridContainer.insertBefore(element, this.unitsContainer);
     }
 
     this.updateViewport();
@@ -202,7 +437,7 @@ export class CSSHexRenderer {
     // Set color based on terrain type and tide
     if (this.useSpriteMode) {
       element.classList.add('sprite-mode');
-      element.style.backgroundImage = `url(/sprites/terrain/${hex.type}.png)`;
+      element.style.backgroundImage = `url(/sprites/terrain/${hex.type}.svg)`;
     } else {
       element.style.backgroundColor = getTerrainColorHex(hex.type, this.currentTide);
     }
@@ -239,14 +474,19 @@ export class CSSHexRenderer {
    * Apply viewport transform to grid container
    */
   private updateViewport(): void {
-    const { x, y, width, height, zoom } = this.viewport;
+    const { zoom } = this.viewport;
 
-    // Calculate the transform to center the camera position in the viewport
-    // The camera position (x, y) should be at the center of the screen
-    const translateX = width / 2 - x * zoom;
-    const translateY = height / 2 - y * zoom;
+    // Calculate map dimensions
+    const mapWidth = this.mapBounds.maxX - this.mapBounds.minX;
+    const mapHeight = this.mapBounds.maxY - this.mapBounds.minY;
 
-    this.gridContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+    // Set grid container size based on zoom (this enables scrollbars)
+    const scaledWidth = mapWidth * zoom;
+    const scaledHeight = mapHeight * zoom;
+
+    this.gridContainer.style.width = `${scaledWidth}px`;
+    this.gridContainer.style.height = `${scaledHeight}px`;
+    this.gridContainer.style.transform = `scale(${zoom})`;
   }
 
   /**
@@ -310,12 +550,116 @@ export class CSSHexRenderer {
   onHexClick(callback: (coord: { q: number; r: number }) => void): void {
     this.gridContainer.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
-      if (target.classList.contains('hex-cell')) {
-        const q = parseInt(target.dataset.q || '0', 10);
-        const r = parseInt(target.dataset.r || '0', 10);
+      const hexCell = target.closest('.hex-cell') as HTMLElement | null;
+      if (hexCell) {
+        const q = parseInt(hexCell.dataset.q || '0', 10);
+        const r = parseInt(hexCell.dataset.r || '0', 10);
+        console.log('CSS Renderer hex click:', { q, r });
         callback({ q, r });
       }
     });
+  }
+
+  /**
+   * Add right-click handler to all hex elements
+   */
+  onHexRightClick(callback: (coord: { q: number; r: number }) => void): void {
+    this.gridContainer.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      const target = event.target as HTMLElement;
+      const hexCell = target.closest('.hex-cell') as HTMLElement | null;
+      if (hexCell) {
+        const q = parseInt(hexCell.dataset.q || '0', 10);
+        const r = parseInt(hexCell.dataset.r || '0', 10);
+        console.log('CSS Renderer hex right-click:', { q, r });
+        callback({ q, r });
+      }
+    });
+  }
+
+  /**
+   * Zoom in by one step
+   */
+  zoomIn(): void {
+    const newZoom = Math.min(MAX_ZOOM, this.viewport.zoom + ZOOM_STEP);
+    if (newZoom !== this.viewport.zoom) {
+      this.viewport.zoom = newZoom;
+      this.updateViewport();
+      this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
+    }
+  }
+
+  /**
+   * Zoom out by one step
+   */
+  zoomOut(): void {
+    const newZoom = Math.max(MIN_ZOOM, this.viewport.zoom - ZOOM_STEP);
+    if (newZoom !== this.viewport.zoom) {
+      this.viewport.zoom = newZoom;
+      this.updateViewport();
+      this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
+    }
+  }
+
+  /**
+   * Reset zoom to fit the map in the viewport
+   */
+  zoomToFit(): void {
+    const containerWidth = this.container.clientWidth;
+    const containerHeight = this.container.clientHeight;
+    const mapWidth = this.mapBounds.maxX - this.mapBounds.minX;
+    const mapHeight = this.mapBounds.maxY - this.mapBounds.minY;
+
+    if (mapWidth > 0 && mapHeight > 0) {
+      const zoomX = (containerWidth * 0.95) / mapWidth;
+      const zoomY = (containerHeight * 0.95) / mapHeight;
+      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(zoomX, zoomY)));
+
+      this.viewport.zoom = newZoom;
+      this.updateViewport();
+      this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
+
+      // Center the map
+      this.centerMap();
+    }
+  }
+
+  /**
+   * Center the map in the viewport
+   */
+  centerMap(): void {
+    const containerWidth = this.container.clientWidth;
+    const containerHeight = this.container.clientHeight;
+    const mapWidth = (this.mapBounds.maxX - this.mapBounds.minX) * this.viewport.zoom;
+    const mapHeight = (this.mapBounds.maxY - this.mapBounds.minY) * this.viewport.zoom;
+
+    // Calculate scroll position to center the map
+    const scrollX = Math.max(0, (mapWidth - containerWidth) / 2);
+    const scrollY = Math.max(0, (mapHeight - containerHeight) / 2);
+
+    this.container.scrollLeft = scrollX;
+    this.container.scrollTop = scrollY;
+  }
+
+  /**
+   * Get current zoom level
+   */
+  getZoom(): number {
+    return this.viewport.zoom;
+  }
+
+  /**
+   * Register a callback for zoom changes
+   */
+  onZoomChange(callback: (zoom: number) => void): void {
+    this.zoomChangeCallbacks.add(callback);
+  }
+
+  /**
+   * Unregister a zoom change callback
+   */
+  offZoomChange(callback: (zoom: number) => void): void {
+    this.zoomChangeCallbacks.delete(callback);
   }
 
   /**
@@ -324,5 +668,7 @@ export class CSSHexRenderer {
   destroy(): void {
     this.container.remove();
     this.hexElements.clear();
+    this.unitElements.clear();
+    this.zoomChangeCallbacks.clear();
   }
 }

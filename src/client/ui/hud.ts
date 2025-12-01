@@ -2,7 +2,7 @@
  * HUD (Heads-Up Display) component for game interface
  */
 
-import type { TideLevel } from '@/shared/game/types';
+import type { TideLevel, GamePhase } from '@/shared/game/types';
 
 export interface LobbyPlayer {
   id: string;
@@ -10,6 +10,21 @@ export interface LobbyPlayer {
   color: string;
   isReady: boolean;
 }
+
+export interface PhaseInfo {
+  phase: GamePhase;
+  isMyTurn: boolean;
+  currentPlayerName: string;
+  currentPlayerColor: string;
+}
+
+const PHASE_INSTRUCTIONS: Record<GamePhase, string> = {
+  landing: '<strong>Landing Phase (Turn 1):</strong> Position your Astronef on the map. Click on valid land or marsh hexes to place your 4-hex spacecraft. <br><em>Press <kbd>R</kbd> to rotate before placing.</em>',
+  deployment: '<strong>Deployment Phase (Turn 2):</strong> Deploy your units from the Astronef. Select a unit from inventory and click adjacent hexes to deploy. <br><em>Press <kbd>R</kbd> to rotate selected unit.</em>',
+  playing: '<strong>Playing Phase:</strong> Move units, collect minerals, engage enemies. Use Action Points wisely. You can save up to 10 AP for next turn.',
+  liftoff: '<strong>Lift-Off Decision (Turn 21):</strong> Choose whether to lift off now (safe but fewer turns) or stay until turn 25 (risky but more time).',
+  finished: '<strong>Game Over:</strong> Final scores are calculated based on minerals and equipment in your Astronef.',
+};
 
 export class HUD {
   private apValueEl: HTMLElement;
@@ -26,6 +41,20 @@ export class HUD {
   private turnEndTime: number = 0;
   private isReady: boolean = false;
 
+  // New elements for turn/phase display
+  private currentPlayerEl: HTMLElement;
+  private phaseEl: HTMLElement;
+  private instructionsEl: HTMLElement;
+  private instructionsPhaseTitleEl: HTMLElement;
+  private instructionsContentEl: HTMLElement;
+  private yourTurnIndicatorEl: HTMLElement;
+
+  // Zoom controls
+  private zoomInBtn: HTMLButtonElement;
+  private zoomOutBtn: HTMLButtonElement;
+  private zoomFitBtn: HTMLButtonElement;
+  private zoomLevelEl: HTMLElement;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -37,6 +66,20 @@ export class HUD {
     this.gameSectionEl = document.getElementById('game-section')!;
     this.playerListEl = document.getElementById('player-list')!;
     this.statusMessageEl = document.getElementById('status-message')!;
+
+    // New elements
+    this.currentPlayerEl = document.getElementById('current-player-value')!;
+    this.phaseEl = document.getElementById('phase-value')!;
+    this.instructionsEl = document.getElementById('phase-instructions')!;
+    this.instructionsPhaseTitleEl = document.getElementById('instructions-phase-title')!;
+    this.instructionsContentEl = document.getElementById('instructions-content')!;
+    this.yourTurnIndicatorEl = document.getElementById('your-turn-indicator')!;
+
+    // Zoom controls
+    this.zoomInBtn = document.getElementById('zoom-in-btn') as HTMLButtonElement;
+    this.zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
+    this.zoomFitBtn = document.getElementById('zoom-fit-btn') as HTMLButtonElement;
+    this.zoomLevelEl = document.getElementById('zoom-level')!;
   }
 
   /**
@@ -232,6 +275,91 @@ export class HUD {
     if (loadingEl) {
       loadingEl.classList.add('hidden');
     }
+  }
+
+  /**
+   * Set zoom in button click handler
+   */
+  onZoomIn(callback: () => void): void {
+    this.zoomInBtn?.addEventListener('click', callback);
+  }
+
+  /**
+   * Set zoom out button click handler
+   */
+  onZoomOut(callback: () => void): void {
+    this.zoomOutBtn?.addEventListener('click', callback);
+  }
+
+  /**
+   * Set zoom fit button click handler
+   */
+  onZoomFit(callback: () => void): void {
+    this.zoomFitBtn?.addEventListener('click', callback);
+  }
+
+  /**
+   * Update the zoom level display
+   */
+  updateZoomLevel(zoom: number): void {
+    if (this.zoomLevelEl) {
+      const percentage = Math.round(zoom * 100);
+      this.zoomLevelEl.textContent = `${percentage}%`;
+    }
+  }
+
+  /**
+   * Update current player display
+   */
+  updateCurrentPlayer(name: string, color: string, isMyTurn: boolean): void {
+    this.currentPlayerEl.textContent = name;
+    this.currentPlayerEl.className = `hud-value player-indicator ${color}`;
+
+    // Update your turn indicator
+    if (isMyTurn) {
+      this.yourTurnIndicatorEl.style.display = 'inline-block';
+      this.instructionsEl.classList.add('my-turn');
+    } else {
+      this.yourTurnIndicatorEl.style.display = 'none';
+      this.instructionsEl.classList.remove('my-turn');
+    }
+  }
+
+  /**
+   * Update phase display
+   */
+  updatePhase(phase: GamePhase): void {
+    const phaseText = phase.toUpperCase();
+    this.phaseEl.textContent = phaseText;
+    this.phaseEl.className = `hud-value phase-indicator phase-${phase}`;
+
+    // Update instructions phase title
+    this.instructionsPhaseTitleEl.textContent = `${phaseText} PHASE`;
+
+    // Update instructions content
+    this.instructionsContentEl.innerHTML = PHASE_INSTRUCTIONS[phase];
+  }
+
+  /**
+   * Update all phase info at once
+   */
+  updatePhaseInfo(info: PhaseInfo): void {
+    this.updateCurrentPlayer(info.currentPlayerName, info.currentPlayerColor, info.isMyTurn);
+    this.updatePhase(info.phase);
+  }
+
+  /**
+   * Show the instructions panel
+   */
+  showInstructions(): void {
+    this.instructionsEl.style.display = 'block';
+  }
+
+  /**
+   * Hide the instructions panel
+   */
+  hideInstructions(): void {
+    this.instructionsEl.style.display = 'none';
   }
 
   /**

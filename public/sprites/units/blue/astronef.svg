@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <defs>
+    <linearGradient id="astronef-body-blue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6699FF"/>
+      <stop offset="50%" style="stop-color:#3366CC"/>
+      <stop offset="100%" style="stop-color:#224499"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="30" cy="26" rx="18" ry="8" fill="url(#astronef-body-blue)" stroke="#112266" stroke-width="1"/>
+  <ellipse cx="30" cy="22" rx="10" ry="6" fill="#99CCFF" opacity="0.7" stroke="#112266" stroke-width="0.5"/>
+  <ellipse cx="30" cy="32" rx="8" ry="3" fill="#0066FF" opacity="0.5"/>
+  <circle cx="20" cy="26" r="2" fill="#FFFF00"/>
+  <circle cx="30" cy="28" r="2" fill="#FFFFFF"/>
+  <circle cx="40" cy="26" r="2" fill="#FFFF00"/>
+</svg>

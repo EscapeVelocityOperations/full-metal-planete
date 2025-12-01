@@ -2,9 +2,11 @@
  * Map Generator for Full Metal Planete
  *
  * Generates a hexagonal island map with terrain types.
+ * Default dimensions are 37x23 (851 hexes) matching the official board game.
  */
 
-import { TerrainType, type HexTerrain, type HexCoord, TideLevel } from './types';
+import { TerrainType, type HexTerrain, type HexCoord, TideLevel, type Mineral } from './types';
+import { generateOfficialMap, OFFICIAL_MAP_DIMENSIONS } from './maps';
 
 export interface MapConfig {
   width: number;
@@ -16,8 +18,8 @@ export interface MapConfig {
 }
 
 const DEFAULT_CONFIG: MapConfig = {
-  width: 27,   // Columns (q direction) - wider for 16:9/16:10 screens
-  height: 11,  // Rows (r direction) - fewer rows for rectangular fit
+  width: OFFICIAL_MAP_DIMENSIONS.width,   // 37 columns (q direction)
+  height: OFFICIAL_MAP_DIMENSIONS.height, // 23 rows (r direction)
   seaRatio: 0.30,
   mountainRatio: 0.08,
   marshRatio: 0.10,
@@ -117,10 +119,11 @@ export function generateMap(config: Partial<MapConfig> = {}, seed?: number): Hex
 
 /**
  * Generate a simple demo map for testing
- * Uses 27x11 grid for better fit on widescreen displays (16:9, 16:10)
+ * Uses 37x23 grid matching the official board game dimensions
  */
 export function generateDemoMap(): HexTerrain[] {
-  return generateMap({ width: 27, height: 11 }, 12345);
+  // Use the official map for demo/testing
+  return generateOfficialMap();
 }
 
 /**
@@ -142,4 +145,60 @@ export function createTideDeck(): TideLevel[] {
   }
 
   return deck;
+}
+
+/**
+ * Default number of minerals for standard game
+ * The official game has approximately 80-100 minerals on the 851-hex map
+ */
+const DEFAULT_MINERAL_COUNT = 90;
+
+/**
+ * Terrain types where minerals can be placed
+ * Minerals can only be collected from Land, Marsh (except High tide), and Reef (Low tide only)
+ */
+const MINERAL_VALID_TERRAIN = [TerrainType.Land, TerrainType.Marsh, TerrainType.Reef];
+
+/**
+ * Generate minerals and place them on valid terrain hexes
+ *
+ * @param terrain - The terrain array for the map
+ * @param count - Number of minerals to place (default: 90)
+ * @param seed - Optional seed for reproducible placement
+ * @returns Array of Mineral objects with positions
+ */
+export function generateMinerals(
+  terrain: HexTerrain[],
+  count: number = DEFAULT_MINERAL_COUNT,
+  seed?: number
+): Mineral[] {
+  const rng = new SeededRandom(seed);
+
+  // Filter terrain to valid mineral placement hexes
+  const validHexes = terrain.filter(hex => MINERAL_VALID_TERRAIN.includes(hex.type));
+
+  if (validHexes.length === 0) {
+    return [];
+  }
+
+  // Limit count to available hexes
+  const mineralCount = Math.min(count, validHexes.length);
+
+  // Shuffle valid hexes using seeded random
+  const shuffledHexes = [...validHexes];
+  for (let i = shuffledHexes.length - 1; i > 0; i--) {
+    const j = Math.floor(rng.next() * (i + 1));
+    [shuffledHexes[i], shuffledHexes[j]] = [shuffledHexes[j], shuffledHexes[i]];
+  }
+
+  // Create minerals at the first N positions
+  const minerals: Mineral[] = [];
+  for (let i = 0; i < mineralCount; i++) {
+    minerals.push({
+      id: `mineral-${i}`,
+      position: { ...shuffledHexes[i].coord },
+    });
+  }
+
+  return minerals;
 }

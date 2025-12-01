@@ -117,6 +117,10 @@ export class GameClient {
           this.emit('action', message.payload);
           break;
 
+        case 'STATE_UPDATE':
+          this.emit('stateUpdate', message.payload.gameState);
+          break;
+
         case 'TURN_END':
           this.emit('turnEnd', message.payload);
           break;

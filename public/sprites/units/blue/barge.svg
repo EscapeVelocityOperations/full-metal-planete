@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <defs>
+    <linearGradient id="barge-hull-blue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4466CC"/>
+      <stop offset="100%" style="stop-color:#223388"/>
+    </linearGradient>
+  </defs>
+  <polygon points="6,28 54,28 50,40 10,40" fill="url(#barge-hull-blue)" stroke="#112266" stroke-width="1"/>
+  <rect x="8" y="24" width="44" height="6" fill="#3355AA" stroke="#223388" stroke-width="0.5"/>
+  <rect x="12" y="16" width="10" height="10" fill="#4A5A4A" stroke="#3A4A3A" stroke-width="0.5"/>
+  <rect x="24" y="16" width="10" height="10" fill="#5A4A4A" stroke="#4A3A3A" stroke-width="0.5"/>
+  <rect x="36" y="16" width="10" height="10" fill="#4A4A5A" stroke="#3A3A4A" stroke-width="0.5"/>
+  <line x1="48" y1="12" x2="48" y2="24" stroke="#606060" stroke-width="2"/>
+  <line x1="48" y1="12" x2="36" y2="16" stroke="#606060" stroke-width="1.5"/>
+  <line x1="8" y1="22" x2="52" y2="22" stroke="#5577CC" stroke-width="0.5"/>
+</svg>

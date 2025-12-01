@@ -82,10 +82,11 @@ export class Room {
   /**
    * Check if room is ready to start
    * Requires at least 2 players, all players ready
+   * @returns true if room just became ready, false otherwise
    */
-  checkReadyState(): void {
+  checkReadyState(): boolean {
     if (this.state !== 'waiting') {
-      return;
+      return false;
     }
 
     const hasMinPlayers = this.players.length >= 2;
@@ -93,7 +94,9 @@ export class Room {
 
     if (hasMinPlayers && allReady) {
       this.state = 'ready';
+      return true;
     }
+    return false;
   }
 
   /**

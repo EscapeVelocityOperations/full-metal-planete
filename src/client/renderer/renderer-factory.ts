@@ -6,12 +6,14 @@ import { HexRenderer } from './renderer';
 import { CSSHexRenderer } from './css/css-renderer';
 import type { TerrainHex } from './terrain-layer';
 import type { TideLevel, Viewport, RendererCapabilities, RendererBackend } from './types';
+import type { Unit } from '@/shared/game/types';
 
 /**
  * Unified renderer interface
  */
 export interface IHexRenderer {
   setTerrainData(terrainHexes: TerrainHex[]): void;
+  setUnits?(units: Unit[]): void;
   setTide(tide: TideLevel): void;
   setViewport(viewport: Partial<Viewport>): void;
   render(): void;
@@ -19,6 +21,19 @@ export interface IHexRenderer {
   getBackend(): RendererBackend;
   getViewportSize(): { width: number; height: number };
   destroy(): void;
+
+  // Zoom control methods (optional - may not be implemented by all renderers)
+  zoomIn?(): void;
+  zoomOut?(): void;
+  zoomToFit?(): void;
+  centerMap?(): void;
+  getZoom?(): number;
+  onZoomChange?(callback: (zoom: number) => void): void;
+  offZoomChange?(callback: (zoom: number) => void): void;
+
+  // Input handling (optional - CSS renderer uses DOM events)
+  onHexClick?(callback: (coord: { q: number; r: number }) => void): void;
+  onHexRightClick?(callback: (coord: { q: number; r: number }) => void): void;
 }
 
 export type RendererType = 'auto' | 'webgpu' | 'css';

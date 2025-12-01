@@ -25,21 +25,42 @@ import {
   type EndTurnAction,
   type BuildAction,
   type TurretState,
+  type LandAstronefAction,
+  type DeployUnitAction,
+  type ValidationResult,
 } from './types';
 import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP } from './actions';
 import { hexKey } from './hex';
+import { generateMinerals } from './map-generator';
+import { isUnitStuck, isUnitGrounded, getEffectiveTerrain, canAstronefLandOn } from './terrain';
 
 // ============================================================================
 // Array Utilities
 // ============================================================================
 
 /**
- * Fisher-Yates shuffle algorithm.
+ * Seeded random number generator (mulberry32).
+ * Returns a value between 0 and 1.
  */
-export function shuffleArray<T>(array: T[]): T[] {
+export function seededRandom(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Fisher-Yates shuffle algorithm with optional seed for reproducibility.
+ */
+export function shuffleArray<T>(array: T[], seed?: number): T[] {
   const result = [...array];
+  const random = seed !== undefined ? seededRandom(seed) : Math.random;
   for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(random() * (i + 1));
     [result[i], result[j]] = [result[j], result[i]];
   }
   return result;
@@ -84,6 +105,136 @@ export function drawTideCard(state: GameState): GameState {
     tideDeck,
     tideDiscard,
   };
+}
+
+/**
+ * Predict the next tide card (for Converter owners).
+ * Returns the top card of the tide deck without drawing it.
+ * Returns undefined if deck is empty and needs reshuffle.
+ */
+export function predictNextTide(state: GameState): TideLevel | undefined {
+  // If deck is empty, can't predict until reshuffle (which happens at draw time)
+  if (state.tideDeck.length === 0) {
+    return undefined;
+  }
+  return state.tideDeck[0];
+}
+
+/**
+ * Check if a player can predict the tide (owns a Converter).
+ */
+export function canPlayerPredictTide(state: GameState, playerId: string): boolean {
+  return state.units.some(
+    (unit) =>
+      unit.owner === playerId &&
+      unit.type === UnitType.Converter &&
+      // Converter must not be in cargo (loaded on another unit)
+      unit.position.q !== -9999
+  );
+}
+
+/**
+ * Get tide probabilities based on remaining cards in deck.
+ * Returns the probability of each tide level being drawn next.
+ */
+export function getTideProbabilities(state: GameState): Record<TideLevel, number> {
+  const deck = state.tideDeck;
+  const total = deck.length;
+
+  if (total === 0) {
+    // Deck is empty, will reshuffle discard - calculate from discard
+    const discard = state.tideDiscard;
+    const discardTotal = discard.length;
+    if (discardTotal === 0) {
+      return { [TideLevel.Low]: 0, [TideLevel.Normal]: 0, [TideLevel.High]: 0 };
+    }
+    return {
+      [TideLevel.Low]: discard.filter((t) => t === TideLevel.Low).length / discardTotal,
+      [TideLevel.Normal]: discard.filter((t) => t === TideLevel.Normal).length / discardTotal,
+      [TideLevel.High]: discard.filter((t) => t === TideLevel.High).length / discardTotal,
+    };
+  }
+
+  return {
+    [TideLevel.Low]: deck.filter((t) => t === TideLevel.Low).length / total,
+    [TideLevel.Normal]: deck.filter((t) => t === TideLevel.Normal).length / total,
+    [TideLevel.High]: deck.filter((t) => t === TideLevel.High).length / total,
+  };
+}
+
+/**
+ * Update stuck status for all units based on current tide.
+ * Land units on flooded terrain become stuck.
+ * Sea units on exposed terrain become stuck (grounded).
+ * Units that were stuck but are now on compatible terrain are no longer stuck.
+ */
+export function updateUnitsStuckStatus(state: GameState): GameState {
+  const updatedUnits = state.units.map((unit) => {
+    // Skip units in cargo (position at -9999)
+    if (unit.position.q === -9999) {
+      return unit;
+    }
+
+    // Find terrain at unit's position
+    const terrain = state.terrain.find(
+      (t) => t.coord.q === unit.position.q && t.coord.r === unit.position.r
+    );
+
+    if (!terrain) {
+      return unit;
+    }
+
+    // Check if unit is stuck or grounded
+    const stuck = isUnitStuck(unit.type, terrain.type, state.currentTide);
+    const grounded = isUnitGrounded(unit.type, terrain.type, state.currentTide);
+
+    // Update isStuck flag (covers both stuck and grounded)
+    const newStuckStatus = stuck || grounded;
+
+    if (unit.isStuck !== newStuckStatus) {
+      return { ...unit, isStuck: newStuckStatus };
+    }
+
+    return unit;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+  };
+}
+
+/**
+ * Get all units that are currently stuck or grounded.
+ */
+export function getStuckUnits(state: GameState): Unit[] {
+  return state.units.filter((unit) => unit.isStuck);
+}
+
+/**
+ * Check if a specific unit is stuck at current tide.
+ */
+export function isUnitStuckAtPosition(
+  state: GameState,
+  unitId: string
+): boolean {
+  const unit = state.units.find((u) => u.id === unitId);
+  if (!unit || unit.position.q === -9999) {
+    return false;
+  }
+
+  const terrain = state.terrain.find(
+    (t) => t.coord.q === unit.position.q && t.coord.r === unit.position.r
+  );
+
+  if (!terrain) {
+    return false;
+  }
+
+  return (
+    isUnitStuck(unit.type, terrain.type, state.currentTide) ||
+    isUnitGrounded(unit.type, terrain.type, state.currentTide)
+  );
 }
 
 // ============================================================================
@@ -196,6 +347,9 @@ export function createInitialGameState(
     liftOffDecisions[player.id] = null;
   }
 
+  // Generate minerals on valid terrain
+  const minerals = generateMinerals(terrain);
+
   return {
     gameId,
     turn: 1,
@@ -210,7 +364,7 @@ export function createInitialGameState(
     tideDeck,
     tideDiscard,
     terrain,
-    minerals: [], // Minerals placed separately
+    minerals,
     units,
     bridges: [],
     players,
@@ -223,6 +377,72 @@ export function createInitialGameState(
 // ============================================================================
 
 /**
+ * Rotate turn order so the first player becomes last.
+ * In FMP, turn order rotates each round.
+ */
+export function rotateTurnOrder(turnOrder: string[]): string[] {
+  if (turnOrder.length <= 1) {
+    return turnOrder;
+  }
+  const [first, ...rest] = turnOrder;
+  return [...rest, first];
+}
+
+/**
+ * Check if it's a specific player's turn.
+ */
+export function isPlayersTurn(state: GameState, playerId: string): boolean {
+  return state.currentPlayer === playerId;
+}
+
+/**
+ * Check if turn timer has expired.
+ */
+export function isTurnTimerExpired(state: GameState): boolean {
+  const elapsed = Date.now() - state.turnStartTime;
+  return elapsed >= state.turnTimeLimit;
+}
+
+/**
+ * Get remaining time in current turn (in milliseconds).
+ */
+export function getRemainingTurnTime(state: GameState): number {
+  const elapsed = Date.now() - state.turnStartTime;
+  const remaining = state.turnTimeLimit - elapsed;
+  return Math.max(0, remaining);
+}
+
+/**
+ * Calculate initial turn order based on landing positions.
+ * Player furthest from cliffs (left edge) goes first.
+ * In FMP, the cliffs are on the left side of the board (q=0).
+ */
+export function calculateInitialTurnOrder(
+  players: Player[]
+): string[] {
+  // Sort players by their astronef landing position (furthest from left edge first)
+  const sortedPlayers = [...players].sort((a, b) => {
+    const aMinQ = Math.min(...a.astronefPosition.map((pos) => pos.q));
+    const bMinQ = Math.min(...b.astronefPosition.map((pos) => pos.q));
+    // Higher q value = further from cliffs = goes first
+    return bMinQ - aMinQ;
+  });
+  return sortedPlayers.map((p) => p.id);
+}
+
+/**
+ * Handle turn timeout - forces turn end with 0 AP saved.
+ */
+export function handleTurnTimeout(state: GameState): GameState {
+  // Force end turn with no AP saved
+  return advanceTurn({
+    ...state,
+    // Clear any remaining AP - timeout means no saving
+    actionPoints: 0,
+  });
+}
+
+/**
  * Advance to the next player or next turn.
  */
 export function advanceTurn(state: GameState): GameState {
@@ -232,10 +452,13 @@ export function advanceTurn(state: GameState): GameState {
 
   let newTurn = state.turn;
   let newPhase = state.phase;
+  let newTurnOrder = state.turnOrder;
 
   // Check if we're moving to a new round
   if (isNewRound) {
     newTurn = state.turn + 1;
+    // Rotate turn order so first player from last round goes last
+    newTurnOrder = rotateTurnOrder(state.turnOrder);
 
     // Update phase based on turn
     if (newTurn === 2) {
@@ -249,8 +472,10 @@ export function advanceTurn(state: GameState): GameState {
     }
   }
 
+  // Get next player - from rotated order if new round, otherwise from current position
+  const nextPlayer = isNewRound ? newTurnOrder[0] : state.turnOrder[nextIndex];
+
   // Calculate new AP
-  const nextPlayer = state.turnOrder[nextIndex];
   const savedAP = state.savedActionPoints[nextPlayer] ?? 0;
   const capturedAstronefs = state.players.find((p) => p.id === nextPlayer)?.capturedAstronefs.length ?? 0;
   const newActionPoints = calculateTotalActionPoints(
@@ -260,11 +485,14 @@ export function advanceTurn(state: GameState): GameState {
     capturedAstronefs
   );
 
-  // Reset shots for all combat units
+  // Reset shots for all combat units at the start of each player's turn
   const updatedUnits = state.units.map((unit) => {
-    const maxShots = UNIT_PROPERTIES[unit.type].maxShots ?? 0;
-    if (maxShots > 0) {
-      return { ...unit, shotsRemaining: maxShots };
+    // Only reset shots for units owned by the next player
+    if (unit.owner === nextPlayer) {
+      const maxShots = UNIT_PROPERTIES[unit.type].maxShots ?? 0;
+      if (maxShots > 0) {
+        return { ...unit, shotsRemaining: maxShots };
+      }
     }
     return unit;
   });
@@ -274,6 +502,7 @@ export function advanceTurn(state: GameState): GameState {
     ...state,
     turn: newTurn,
     phase: newPhase,
+    turnOrder: newTurnOrder,
     currentPlayer: nextPlayer,
     actionPoints: newActionPoints,
     turnStartTime: Date.now(),
@@ -282,6 +511,8 @@ export function advanceTurn(state: GameState): GameState {
 
   if (isNewRound && newTurn >= 3) {
     newState = drawTideCard(newState);
+    // Update stuck status for all units after tide changes
+    newState = updateUnitsStuckStatus(newState);
   }
 
   return newState;
@@ -469,6 +700,320 @@ export function applyBuildAction(state: GameState, action: BuildAction): GameSta
     minerals: updatedMinerals,
     actionPoints: state.actionPoints - action.apCost,
   };
+}
+
+// ============================================================================
+// Setup Phase Actions (Landing & Deployment)
+// ============================================================================
+
+/**
+ * Get the 4 hex positions that form an astronef's footprint.
+ * Astronef is a tri-hex shape (3 podes) arranged in a specific pattern.
+ * The position array should contain 4 hexes (the astronef body).
+ */
+export function getAstronefHexes(centerHex: HexCoord): HexCoord[] {
+  // Astronef occupies 4 hexes in a specific formation
+  // The center hex and 3 adjacent hexes forming a compact shape
+  return [
+    centerHex,
+    { q: centerHex.q + 1, r: centerHex.r },
+    { q: centerHex.q, r: centerHex.r + 1 },
+    { q: centerHex.q + 1, r: centerHex.r - 1 },
+  ];
+}
+
+/**
+ * Validate astronef landing position.
+ * Rules:
+ * - Must be during Landing phase
+ * - Player must not have already landed
+ * - All 4 hexes must be on Land or Marsh terrain
+ * - No other astronef can occupy those hexes
+ * - Must be within player's assigned landing zone
+ */
+export function validateLandAstronefAction(
+  state: GameState,
+  action: LandAstronefAction
+): ValidationResult {
+  // Check phase
+  if (state.phase !== GamePhase.Landing) {
+    return { valid: false, error: 'Can only land astronef during Landing phase' };
+  }
+
+  // Check it's the player's turn
+  if (state.currentPlayer !== action.playerId) {
+    return { valid: false, error: 'Not your turn' };
+  }
+
+  // Check player hasn't already landed
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player) {
+    return { valid: false, error: 'Player not found' };
+  }
+
+  // Check if astronef already has a valid position (not at origin)
+  const playerAstronef = state.units.find(
+    (u) => u.type === UnitType.Astronef && u.owner === action.playerId
+  );
+  if (playerAstronef && playerAstronef.position.q !== 0) {
+    return { valid: false, error: 'Astronef already landed' };
+  }
+
+  // Must provide exactly 4 positions (for the astronef's 4-hex footprint)
+  if (action.position.length !== 4) {
+    return { valid: false, error: 'Must provide exactly 4 hex positions for astronef' };
+  }
+
+  // Check all hexes are valid terrain (Land or Marsh)
+  for (const hex of action.position) {
+    const terrain = state.terrain.find(
+      (t) => t.coord.q === hex.q && t.coord.r === hex.r
+    );
+    if (!terrain) {
+      return { valid: false, error: `Invalid hex position: (${hex.q}, ${hex.r})` };
+    }
+    if (!canAstronefLandOn(terrain.type)) {
+      return {
+        valid: false,
+        error: `Cannot land on ${terrain.type} terrain at (${hex.q}, ${hex.r})`,
+      };
+    }
+  }
+
+  // Check no other astronef occupies these hexes
+  for (const hex of action.position) {
+    const occupyingUnit = state.units.find(
+      (u) =>
+        u.type === UnitType.Astronef &&
+        u.owner !== action.playerId &&
+        u.position.q === hex.q &&
+        u.position.r === hex.r
+    );
+    if (occupyingUnit) {
+      return {
+        valid: false,
+        error: `Hex (${hex.q}, ${hex.r}) is already occupied by another astronef`,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Apply astronef landing action.
+ * Places the astronef and its towers at the specified positions.
+ */
+export function applyLandAstronefAction(
+  state: GameState,
+  action: LandAstronefAction
+): GameState {
+  const validation = validateLandAstronefAction(state, action);
+  if (!validation.valid) {
+    return state; // Don't apply invalid actions
+  }
+
+  // Update astronef position
+  const updatedUnits = state.units.map((unit) => {
+    // Update astronef
+    if (unit.type === UnitType.Astronef && unit.owner === action.playerId) {
+      return { ...unit, position: action.position[0] };
+    }
+    // Update towers to their pode positions (positions 1, 2, 3)
+    if (unit.type === UnitType.Tower && unit.owner === action.playerId) {
+      const podeMatch = unit.id.match(/tower-.*-(\d)/);
+      if (podeMatch) {
+        const podeIndex = parseInt(podeMatch[1], 10);
+        if (podeIndex < action.position.length) {
+          return { ...unit, position: action.position[podeIndex + 1] || action.position[0] };
+        }
+      }
+    }
+    return unit;
+  });
+
+  // Update player's astronef position
+  const updatedPlayers = state.players.map((player) => {
+    if (player.id === action.playerId) {
+      return { ...player, astronefPosition: action.position };
+    }
+    return player;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+    players: updatedPlayers,
+  };
+}
+
+/**
+ * Validate unit deployment position.
+ * Rules:
+ * - Must be during Deployment phase
+ * - Unit must belong to the current player
+ * - Unit must not already be deployed
+ * - Position must be adjacent to player's astronef
+ * - Position must be valid terrain for the unit type
+ * - Position must not be occupied
+ */
+export function validateDeployUnitAction(
+  state: GameState,
+  action: DeployUnitAction
+): ValidationResult {
+  // Check phase
+  if (state.phase !== GamePhase.Deployment) {
+    return { valid: false, error: 'Can only deploy units during Deployment phase' };
+  }
+
+  // Check it's the player's turn
+  if (state.currentPlayer !== action.playerId) {
+    return { valid: false, error: 'Not your turn' };
+  }
+
+  // Find the unit
+  const unit = state.units.find((u) => u.id === action.unitId);
+  if (!unit) {
+    return { valid: false, error: 'Unit not found' };
+  }
+
+  // Check unit belongs to player
+  if (unit.owner !== action.playerId) {
+    return { valid: false, error: 'Unit does not belong to you' };
+  }
+
+  // Check unit is not already deployed (position at 0,0 means undeployed)
+  if (unit.position.q !== 0 || unit.position.r !== 0) {
+    return { valid: false, error: 'Unit already deployed' };
+  }
+
+  // Skip deployment check for astronef and towers (already placed during landing)
+  if (unit.type === UnitType.Astronef || unit.type === UnitType.Tower) {
+    return { valid: false, error: 'Astronef and towers are placed during landing phase' };
+  }
+
+  // Get player's astronef positions
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player || player.astronefPosition.length === 0) {
+    return { valid: false, error: 'Astronef not landed yet' };
+  }
+
+  // Check position is adjacent to astronef
+  const isAdjacentToAstronef = player.astronefPosition.some((astroPos) => {
+    const dq = Math.abs(action.position.q - astroPos.q);
+    const dr = Math.abs(action.position.r - astroPos.r);
+    const ds = Math.abs(-action.position.q - action.position.r - (-astroPos.q - astroPos.r));
+    return (dq + dr + ds) / 2 <= 1;
+  });
+
+  if (!isAdjacentToAstronef) {
+    return { valid: false, error: 'Must deploy adjacent to astronef' };
+  }
+
+  // Check terrain is valid for unit
+  const terrain = state.terrain.find(
+    (t) => t.coord.q === action.position.q && t.coord.r === action.position.r
+  );
+  if (!terrain) {
+    return { valid: false, error: 'Invalid position' };
+  }
+
+  // Get effective terrain at tide (deployment is at Normal tide)
+  const effectiveTerrain = getEffectiveTerrain(terrain.type, TideLevel.Normal);
+  const unitProps = UNIT_PROPERTIES[unit.type];
+
+  // Check domain compatibility
+  if (unitProps.domain === 'land' && effectiveTerrain !== 'land') {
+    return { valid: false, error: 'Land unit cannot deploy on sea terrain' };
+  }
+  if (unitProps.domain === 'sea' && effectiveTerrain !== 'sea') {
+    return { valid: false, error: 'Sea unit cannot deploy on land terrain' };
+  }
+
+  // Check position is not occupied
+  const occupyingUnit = state.units.find(
+    (u) =>
+      u.position.q === action.position.q &&
+      u.position.r === action.position.r &&
+      u.position.q !== 0 // Exclude undeployed units
+  );
+  if (occupyingUnit) {
+    return { valid: false, error: 'Position is occupied' };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Apply unit deployment action.
+ */
+export function applyDeployUnitAction(
+  state: GameState,
+  action: DeployUnitAction
+): GameState {
+  const validation = validateDeployUnitAction(state, action);
+  if (!validation.valid) {
+    return state; // Don't apply invalid actions
+  }
+
+  const updatedUnits = state.units.map((unit) => {
+    if (unit.id === action.unitId) {
+      return { ...unit, position: action.position };
+    }
+    return unit;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+  };
+}
+
+/**
+ * Check if all players have landed their astronef.
+ */
+export function haveAllPlayersLanded(state: GameState): boolean {
+  return state.players.every((player) => {
+    const astronef = state.units.find(
+      (u) => u.type === UnitType.Astronef && u.owner === player.id
+    );
+    // Astronef has landed if position is not at origin (0,0)
+    return astronef && (astronef.position.q !== 0 || astronef.position.r !== 0);
+  });
+}
+
+/**
+ * Check if all of a player's units are deployed.
+ */
+export function hasPlayerDeployedAllUnits(state: GameState, playerId: string): boolean {
+  return state.units
+    .filter((u) => u.owner === playerId)
+    .every((unit) => {
+      // Astronef and towers are placed during landing
+      if (unit.type === UnitType.Astronef || unit.type === UnitType.Tower) {
+        return true;
+      }
+      // Other units must have non-zero position
+      return unit.position.q !== 0 || unit.position.r !== 0;
+    });
+}
+
+/**
+ * Check if all players have deployed all their units.
+ */
+export function haveAllPlayersDeployed(state: GameState): boolean {
+  return state.players.every((player) => hasPlayerDeployedAllUnits(state, player.id));
+}
+
+/**
+ * Get units that still need to be deployed for a player.
+ */
+export function getUndeployedUnits(state: GameState, playerId: string): Unit[] {
+  return state.units.filter((unit) => {
+    if (unit.owner !== playerId) return false;
+    if (unit.type === UnitType.Astronef || unit.type === UnitType.Tower) return false;
+    return unit.position.q === 0 && unit.position.r === 0;
+  });
 }
 
 // ============================================================================

@@ -11,6 +11,7 @@ export interface InputEvents {
   hexHover: (coord: HexCoord | null) => void;
   escape: () => void;
   enter: () => void;
+  keydown: (event: KeyboardEvent) => void;
 }
 
 export class InputHandler {
@@ -72,6 +73,9 @@ export class InputHandler {
    * Handle keyboard event
    */
   private handleKeyDown(event: KeyboardEvent): void {
+    // Emit generic keydown event for custom key handling
+    this.emit('keydown', event);
+
     switch (event.key) {
       case 'Escape':
         this.emit('escape');

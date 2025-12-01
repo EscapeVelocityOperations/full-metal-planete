@@ -1,13 +1,32 @@
 import type { WebSocket } from 'ws';
 import type { Room } from './room.js';
-import type { WSMessage, GameAction } from './types.js';
+import type { WSMessage, GameAction, HexCoord } from './types.js';
+import { initializeGame } from './game-starter.js';
+import type { GameStorage, StoredAction } from './storage/types.js';
+import { UnitType, GamePhase } from '../shared/game/types.js';
+
+interface LandAstronefAction extends GameAction {
+  type: 'LAND_ASTRONEF';
+  position: HexCoord[];
+  playerId: string;
+}
 
 export class WebSocketHandler {
   private connections: Map<string, Map<string, WebSocket>> = new Map();
   private pingInterval: NodeJS.Timeout | null = null;
+  private storage: GameStorage | null = null;
+  private actionSeq: Map<string, number> = new Map();
 
-  constructor() {
+  constructor(storage?: GameStorage) {
+    this.storage = storage || null;
     this.startPingInterval();
+  }
+
+  /**
+   * Set storage backend (can be set after construction)
+   */
+  setStorage(storage: GameStorage): void {
+    this.storage = storage;
   }
 
   /**
@@ -46,7 +65,7 @@ export class WebSocketHandler {
   /**
    * Handle incoming WebSocket message
    */
-  private handleMessage(room: Room, playerId: string, data: string): void {
+  private async handleMessage(room: Room, playerId: string, data: string): Promise<void> {
     try {
       const message: WSMessage = JSON.parse(data);
       room.updatePlayerLastSeen(playerId, new Date());
@@ -54,22 +73,59 @@ export class WebSocketHandler {
       switch (message.type) {
         case 'READY':
           room.setPlayerReady(playerId, true);
-          room.checkReadyState();
           this.broadcast(room.id, {
             type: 'PLAYER_READY',
             payload: { playerId },
             timestamp: Date.now(),
           });
+
+          // Check if all players are ready to start
+          if (room.checkReadyState()) {
+            // Initialize the game
+            const gameState = initializeGame(room.id, room.players);
+            room.startGame(gameState);
+
+            // Persist to storage
+            await this.persistGameStart(room, gameState);
+
+            // Broadcast game start to all players
+            this.broadcast(room.id, {
+              type: 'GAME_START',
+              payload: { gameState },
+              timestamp: Date.now(),
+            });
+          }
           break;
 
         case 'ACTION':
           const action = message.payload as GameAction;
-          this.broadcast(room.id, {
-            type: 'ACTION',
-            payload: action,
-            timestamp: Date.now(),
-            playerId,
-          }, [playerId]);
+
+          // Log action to storage
+          await this.persistAction(room.id, playerId, action);
+
+          // Handle LAND_ASTRONEF specially - update game state and broadcast to ALL
+          if (action.type === 'LAND_ASTRONEF') {
+            const landingResult = this.processLandAstronef(room, action as LandAstronefAction);
+            if (landingResult.success) {
+              // Broadcast state update to ALL players (including sender)
+              this.broadcast(room.id, {
+                type: 'STATE_UPDATE',
+                payload: { gameState: room.gameState },
+                timestamp: Date.now(),
+              });
+              console.log(`Player ${playerId} landed astronef. Next player: ${room.gameState?.currentPlayer}`);
+            } else {
+              this.sendError(room.id, playerId, 'INVALID_LANDING', landingResult.error || 'Landing failed');
+            }
+          } else {
+            // For other actions, broadcast to others (excluding sender)
+            this.broadcast(room.id, {
+              type: 'ACTION',
+              payload: action,
+              timestamp: Date.now(),
+              playerId,
+            }, [playerId]);
+          }
           break;
 
         case 'END_TURN':
@@ -193,5 +249,141 @@ export class WebSocketHandler {
    */
   getConnectionCount(roomId: string): number {
     return this.connections.get(roomId)?.size || 0;
+  }
+
+  /**
+   * Persist game start to storage
+   */
+  private async persistGameStart(room: Room, gameState: import('../shared/game/types.js').GameState): Promise<void> {
+    if (!this.storage) return;
+
+    try {
+      // Save game state
+      await this.storage.saveGameState(gameState);
+
+      // Save room state
+      await this.storage.saveRoom({
+        id: room.id,
+        state: room.state,
+        hostId: room.hostId,
+        players: room.players.map(p => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          isReady: p.isReady,
+          isConnected: p.isConnected,
+          lastSeen: p.lastSeen,
+        })),
+        createdAt: room.createdAt,
+        gameState,
+      });
+
+      // Initialize action sequence for this game
+      this.actionSeq.set(room.id, 0);
+
+      console.log(`Game ${room.id} persisted to storage`);
+    } catch (error) {
+      console.error(`Failed to persist game start for ${room.id}:`, error);
+    }
+  }
+
+  /**
+   * Persist action to storage
+   */
+  private async persistAction(gameId: string, playerId: string, action: GameAction): Promise<void> {
+    if (!this.storage) return;
+
+    try {
+      // Get and increment sequence number
+      const seq = (this.actionSeq.get(gameId) || 0) + 1;
+      this.actionSeq.set(gameId, seq);
+
+      const storedAction: StoredAction = {
+        type: action.type,
+        playerId,
+        timestamp: Date.now(),
+        data: action as unknown as Record<string, unknown>,
+        seq,
+      };
+
+      await this.storage.logAction(gameId, storedAction);
+    } catch (error) {
+      console.error(`Failed to persist action for game ${gameId}:`, error);
+    }
+  }
+
+  /**
+   * Process LAND_ASTRONEF action - update game state and advance turn
+   */
+  private processLandAstronef(room: Room, action: LandAstronefAction): { success: boolean; error?: string } {
+    const gameState = room.gameState;
+    if (!gameState) {
+      return { success: false, error: 'No game state' };
+    }
+
+    // Verify it's landing phase
+    if (gameState.phase !== GamePhase.Landing) {
+      return { success: false, error: 'Not in landing phase' };
+    }
+
+    // Verify it's this player's turn
+    if (gameState.currentPlayer !== action.playerId) {
+      return { success: false, error: 'Not your turn' };
+    }
+
+    // Verify positions array has 4 hexes
+    if (!action.position || action.position.length !== 4) {
+      return { success: false, error: 'Invalid astronef positions' };
+    }
+
+    // Update astronef position (position[0] is center)
+    const astronef = gameState.units.find(
+      u => u.type === UnitType.Astronef && u.owner === action.playerId
+    );
+    if (astronef) {
+      astronef.position = action.position[0];
+    }
+
+    // Update tower positions (positions 1, 2, 3 are podes for towers)
+    const towers = gameState.units.filter(
+      u => u.type === UnitType.Tower && u.owner === action.playerId
+    );
+    towers.forEach((tower, index) => {
+      if (action.position[index + 1]) {
+        tower.position = action.position[index + 1];
+      }
+    });
+
+    // Update player's astronef position
+    const player = gameState.players.find(p => p.id === action.playerId);
+    if (player) {
+      player.astronefPosition = action.position;
+    }
+
+    // Advance to next player in landing sequence
+    const currentIndex = gameState.turnOrder.indexOf(action.playerId);
+    const nextIndex = (currentIndex + 1) % gameState.turnOrder.length;
+    const nextPlayerId = gameState.turnOrder[nextIndex];
+
+    // Check if all players have landed (we've cycled back to first player)
+    const allLanded = gameState.players.every(p =>
+      p.astronefPosition && p.astronefPosition.length === 4
+    );
+
+    if (allLanded) {
+      // All players have landed - advance to deployment phase
+      gameState.phase = GamePhase.Deployment;
+      gameState.turn = 2;
+      gameState.currentPlayer = gameState.turnOrder[0];
+      console.log(`All players landed. Advancing to deployment phase.`);
+    } else {
+      // Move to next player for landing
+      gameState.currentPlayer = nextPlayerId;
+    }
+
+    // Update room's game state
+    room.updateGameState(gameState);
+
+    return { success: true };
   }
 }

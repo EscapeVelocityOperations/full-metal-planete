@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <defs>
+    <linearGradient id="supertank-body-green" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#44AA55"/>
+      <stop offset="100%" style="stop-color:#226633"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="32" width="44" height="14" rx="5" fill="#112211" stroke="#001100" stroke-width="1"/>
+  <circle cx="14" cy="39" r="5" fill="#223322" stroke="#112211" stroke-width="0.5"/>
+  <circle cx="30" cy="39" r="5" fill="#223322" stroke="#112211" stroke-width="0.5"/>
+  <circle cx="46" cy="39" r="5" fill="#223322" stroke="#112211" stroke-width="0.5"/>
+  <polygon points="10,32 50,32 46,18 14,18" fill="url(#supertank-body-green)" stroke="#339944" stroke-width="1.5"/>
+  <line x1="20" y1="18" x2="18" y2="32" stroke="#55BB66" stroke-width="0.5"/>
+  <line x1="40" y1="18" x2="42" y2="32" stroke="#55BB66" stroke-width="0.5"/>
+  <ellipse cx="30" cy="18" rx="12" ry="8" fill="#339944" stroke="#226633" stroke-width="1.5"/>
+  <rect x="40" y="14" width="16" height="3" fill="#337744" stroke="#226633" stroke-width="0.5"/>
+  <rect x="40" y="19" width="16" height="3" fill="#337744" stroke="#226633" stroke-width="0.5"/>
+  <circle cx="26" cy="16" r="4" fill="#226633" stroke="#115522" stroke-width="0.5"/>
+  <line x1="34" y1="10" x2="34" y2="16" stroke="#999999" stroke-width="1"/>
+</svg>

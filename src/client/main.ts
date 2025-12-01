@@ -3,16 +3,19 @@
  */
 
 import { GameApp } from './app';
+import { LabMode } from './lab-mode';
 import { HomePage } from './ui/home-page';
 
 /**
  * Determine which page to show based on URL
  */
-function getRoute(): 'home' | 'game' {
+function getRoute(): 'home' | 'game' | 'lab' {
   const params = new URLSearchParams(window.location.search);
   const hasGameParams = params.has('gameId') && params.has('playerId') && params.has('token');
   const isGamePath = window.location.pathname === '/game';
+  const isLabPath = window.location.pathname === '/lab';
 
+  if (isLabPath) return 'lab';
   return (hasGameParams || isGamePath) ? 'game' : 'home';
 }
 
@@ -97,11 +100,68 @@ async function showGamePage(): Promise<void> {
   }
 }
 
+/**
+ * Show the lab mode page
+ */
+async function showLabPage(): Promise<void> {
+  const homePage = document.getElementById('home-page');
+  const gameContainer = document.getElementById('game-container');
+
+  if (homePage) homePage.classList.add('hidden');
+  if (gameContainer) gameContainer.classList.remove('hidden');
+
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+  if (!canvas) {
+    throw new Error('Canvas element not found');
+  }
+
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  window.addEventListener('resize', () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  });
+
+  try {
+    const lab = new LabMode(canvas);
+    await lab.initialize();
+    lab.startRenderLoop();
+
+    (window as any).labMode = lab;
+
+    console.log('Lab Mode started');
+  } catch (error) {
+    console.error('Failed to start lab mode:', error);
+
+    const errorMessage = document.createElement('div');
+    errorMessage.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 0, 0, 0.9);
+      color: white;
+      padding: 30px;
+      border-radius: 8px;
+      font-size: 18px;
+      text-align: center;
+    `;
+    errorMessage.innerHTML = `
+      <h2>Failed to Start Lab Mode</h2>
+      <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+    `;
+    document.body.appendChild(errorMessage);
+  }
+}
+
 async function main() {
   const route = getRoute();
 
   if (route === 'home') {
     showHomePage();
+  } else if (route === 'lab') {
+    await showLabPage();
   } else {
     await showGamePage();
   }

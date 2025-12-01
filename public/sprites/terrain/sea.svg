@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <defs>
+    <pattern id="waves" patternUnits="userSpaceOnUse" width="12" height="6">
+      <path d="M0,3 Q3,0 6,3 T12,3" fill="none" stroke="#5A6A8E" stroke-width="0.8" opacity="0.5"/>
+    </pattern>
+  </defs>
+  <!-- Flat-top hex shape -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#6B7B9E"/>
+  <!-- Wave pattern -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="url(#waves)"/>
+  <!-- Subtle highlight -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#7A8BA8" stroke-width="0.5" opacity="0.3"/>
+</svg>

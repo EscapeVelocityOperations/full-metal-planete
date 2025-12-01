@@ -6,10 +6,11 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { HEX_SIZE } from '@/client/renderer/types';
 import { GameClient } from './game-client';
-import { HUD, type LobbyPlayer } from './ui/hud';
+import { HUD, type LobbyPlayer, type PhaseInfo } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
-import type { GameState, HexCoord, Unit, MoveAction, TideLevel } from '@/shared/game/types';
-import { hexKey } from '@/shared/game/hex';
+import { DeploymentInventory } from './ui/deployment-inventory';
+import { UnitType, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType, type GamePhase } from '@/shared/game/types';
+import { hexKey, hexRotateAround } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 
 export interface GameConfig {
@@ -33,6 +34,15 @@ export class GameApp {
   private lobbyPlayers: LobbyPlayer[] = [];
   private isInLobby: boolean = true;
 
+  // Astronef rotation state (0-5 for 6 orientations, each 60 degrees)
+  private astronefRotation: number = 0;
+  // Landing preview state
+  private landingPreviewCenter: HexCoord | null = null;
+
+  // Deployment inventory UI
+  private deploymentInventory: DeploymentInventory | null = null;
+  private selectedDeploymentUnitId: string | null = null;
+
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
     this.config = config;
@@ -54,6 +64,7 @@ export class GameApp {
 
     this.input = new InputHandler(this.canvas, this.renderer);
     this.setupInputHandlers();
+    this.setupZoomControls();
 
     // Load placeholder terrain immediately so canvas isn't black
     this.loadPlaceholderTerrain();
@@ -121,6 +132,11 @@ export class GameApp {
       this.handleTurnEnd(data);
     });
 
+    this.client.on('stateUpdate', (gameState: GameState) => {
+      console.log('State update received', gameState);
+      this.handleStateUpdate(gameState);
+    });
+
     this.client.on('error', (error: { code: string; message: string }) => {
       console.error('Game error', error);
       this.hud.showMessage(`Error: ${error.message}`, 5000);
@@ -139,22 +155,104 @@ export class GameApp {
    * Set up input handlers
    */
   private setupInputHandlers(): void {
-    if (!this.input) return;
+    // Use renderer's hex click handlers if available (CSS renderer)
+    // This is necessary because CSS renderer hides the canvas and uses DOM elements
+    if (this.renderer?.onHexClick) {
+      console.log('Using renderer onHexClick handler');
+      this.renderer.onHexClick((coord: HexCoord) => {
+        this.handleHexClick(coord);
+      });
+    }
 
-    this.input.on('hexClick', (coord: HexCoord) => {
-      this.handleHexClick(coord);
+    if (this.renderer?.onHexRightClick) {
+      console.log('Using renderer onHexRightClick handler');
+      this.renderer.onHexRightClick((coord: HexCoord) => {
+        this.handleHexRightClick(coord);
+      });
+    }
+
+    // Fallback to InputHandler for canvas-based renderers (WebGPU)
+    // and for keyboard events which are always needed
+    if (this.input) {
+      // Only use InputHandler hex events if renderer doesn't provide them
+      if (!this.renderer?.onHexClick) {
+        this.input.on('hexClick', (coord: HexCoord) => {
+          this.handleHexClick(coord);
+        });
+      }
+
+      if (!this.renderer?.onHexRightClick) {
+        this.input.on('hexRightClick', (coord: HexCoord) => {
+          this.handleHexRightClick(coord);
+        });
+      }
+
+      // Keyboard events are always handled by InputHandler
+      this.input.on('escape', () => {
+        this.deselectUnit();
+      });
+
+      this.input.on('enter', () => {
+        this.handleEndTurn();
+      });
+
+      // R key to rotate astronef during landing phase
+      this.input.on('keydown', (event: KeyboardEvent) => {
+        if ((event.key === 'r' || event.key === 'R') && this.gameState?.phase === 'landing') {
+          this.rotateAstronef();
+        }
+      });
+    }
+  }
+
+  /**
+   * Rotate astronef by 60 degrees clockwise
+   */
+  private rotateAstronef(): void {
+    this.astronefRotation = (this.astronefRotation + 1) % 6;
+    this.hud.showMessage(`Astronef rotation: ${this.astronefRotation * 60}°`, 1500);
+
+    // Update landing preview if we have one
+    if (this.landingPreviewCenter) {
+      this.updateLandingPreview(this.landingPreviewCenter);
+    }
+  }
+
+  /**
+   * Set up zoom control handlers
+   */
+  private setupZoomControls(): void {
+    if (!this.renderer) return;
+
+    // Register zoom change callback to update HUD
+    if (this.renderer.onZoomChange) {
+      this.renderer.onZoomChange((zoom) => {
+        this.hud.updateZoomLevel(zoom);
+      });
+    }
+
+    // Initialize zoom level display
+    if (this.renderer.getZoom) {
+      this.hud.updateZoomLevel(this.renderer.getZoom());
+    }
+
+    // Hook up HUD buttons
+    this.hud.onZoomIn(() => {
+      if (this.renderer?.zoomIn) {
+        this.renderer.zoomIn();
+      }
     });
 
-    this.input.on('hexRightClick', (coord: HexCoord) => {
-      this.handleHexRightClick(coord);
+    this.hud.onZoomOut(() => {
+      if (this.renderer?.zoomOut) {
+        this.renderer.zoomOut();
+      }
     });
 
-    this.input.on('escape', () => {
-      this.deselectUnit();
-    });
-
-    this.input.on('enter', () => {
-      this.handleEndTurn();
+    this.hud.onZoomFit(() => {
+      if (this.renderer?.zoomToFit) {
+        this.renderer.zoomToFit();
+      }
     });
   }
 
@@ -319,8 +417,36 @@ export class GameApp {
     this.isInLobby = false;
     this.gameState = gameState;
     this.hud.enterGameMode();
+
+    // Initialize deployment inventory
+    this.initializeDeploymentInventory();
+
     this.updateGameState(gameState);
     this.hud.showMessage('Game started!', 3000);
+  }
+
+  /**
+   * Initialize deployment inventory UI
+   */
+  private initializeDeploymentInventory(): void {
+    if (this.deploymentInventory) {
+      this.deploymentInventory.destroy();
+    }
+
+    // Get player color from lobby players
+    const myPlayer = this.lobbyPlayers.find(p => p.id === this.client['playerId']);
+    const playerColor = myPlayer?.color || 'red';
+
+    this.deploymentInventory = new DeploymentInventory({
+      playerColor,
+      onUnitSelect: (unitType: UnitType, unitId: string) => {
+        this.selectedDeploymentUnitId = unitId;
+        console.log('Selected deployment unit:', unitType, unitId);
+      },
+      onRotate: () => {
+        // Handled by R key
+      },
+    });
   }
 
   /**
@@ -342,6 +468,12 @@ export class GameApp {
     if (gameState.currentTide && this.renderer) {
       this.renderer.setTide(gameState.currentTide);
       this.hud.updateTide(gameState.currentTide);
+    }
+
+    // Update units rendering
+    if (this.renderer?.setUnits && this.gameState.units) {
+      console.log('Updating units in renderer:', this.gameState.units.length, 'units');
+      this.renderer.setUnits(this.gameState.units);
     }
 
     if (gameState.turn !== undefined) {
@@ -373,13 +505,62 @@ export class GameApp {
   }
 
   /**
-   * Check if it's the current player's turn
+   * Check if it's the current player's turn and update phase info
    */
   private checkMyTurn(): void {
     if (!this.gameState) return;
 
     this.isMyTurn = this.gameState.currentPlayer === this.client['playerId'];
     this.hud.setEndTurnEnabled(this.isMyTurn);
+
+    // Update phase and current player display
+    const currentPlayerData = this.getPlayerData(this.gameState.currentPlayer);
+    const phaseInfo: PhaseInfo = {
+      phase: this.gameState.phase,
+      isMyTurn: this.isMyTurn,
+      currentPlayerName: currentPlayerData?.name || 'Unknown',
+      currentPlayerColor: currentPlayerData?.color || 'red',
+    };
+    this.hud.updatePhaseInfo(phaseInfo);
+    this.hud.showInstructions();
+
+    // Handle deployment inventory visibility
+    this.updateDeploymentInventory();
+  }
+
+  /**
+   * Update deployment inventory based on game phase
+   */
+  private updateDeploymentInventory(): void {
+    if (!this.deploymentInventory || !this.gameState) return;
+
+    if (this.gameState.phase === 'deployment' && this.isMyTurn) {
+      // Set units from game state
+      this.deploymentInventory.setUnits(this.gameState.units);
+
+      // Find already deployed units (units not in astronef, i.e. have non-astronef position)
+      const deployedUnitIds = this.gameState.units
+        .filter(u => {
+          // A unit is deployed if it's on the map and not an astronef/tower
+          if (u.type === UnitType.Astronef || u.type === UnitType.Tower) return false;
+          // Check if unit has a position (deployed) or is still in astronef (not deployed)
+          return u.position !== null;
+        })
+        .map(u => u.id);
+
+      this.deploymentInventory.setDeployedUnits(deployedUnitIds);
+      this.deploymentInventory.show();
+    } else {
+      this.deploymentInventory.hide();
+      this.selectedDeploymentUnitId = null;
+    }
+  }
+
+  /**
+   * Get player data by ID
+   */
+  private getPlayerData(playerId: string): LobbyPlayer | undefined {
+    return this.lobbyPlayers.find(p => p.id === playerId);
   }
 
   /**
@@ -388,6 +569,18 @@ export class GameApp {
   private handleHexClick(coord: HexCoord): void {
     if (!this.isMyTurn || !this.gameState) return;
 
+    // Handle different phases
+    if (this.gameState.phase === 'landing') {
+      this.handleLandingPhaseClick(coord);
+      return;
+    }
+
+    if (this.gameState.phase === 'deployment') {
+      this.handleDeploymentPhaseClick(coord);
+      return;
+    }
+
+    // Normal gameplay (playing phase)
     const unit = this.getUnitAtHex(coord);
 
     if (this.selectedUnit) {
@@ -399,6 +592,174 @@ export class GameApp {
     } else if (unit && unit.owner === this.client['playerId']) {
       this.selectUnit(unit);
     }
+  }
+
+  /**
+   * Handle hex click during deployment phase
+   * Players deploy units from the astronef to adjacent hexes
+   */
+  private handleDeploymentPhaseClick(coord: HexCoord): void {
+    if (!this.gameState || !this.deploymentInventory) return;
+
+    // Get selected unit from inventory
+    const selectedUnit = this.deploymentInventory.getSelectedUnit();
+    if (!selectedUnit) {
+      this.hud.showMessage('Select a unit from the inventory first', 2000);
+      return;
+    }
+
+    // Check if hex is valid for deployment (adjacent to astronef)
+    const player = this.gameState.players.find(p => p.id === this.client['playerId']);
+    if (!player?.astronefPosition || player.astronefPosition.length === 0) {
+      this.hud.showMessage('Astronef not landed yet', 2000);
+      return;
+    }
+
+    // Check if clicked hex is adjacent to any astronef hex
+    const astronefHexes = player.astronefPosition;
+    const isAdjacent = astronefHexes.some(astronefHex =>
+      this.getNeighbors(astronefHex).some(neighbor =>
+        neighbor.q === coord.q && neighbor.r === coord.r
+      )
+    );
+
+    if (!isAdjacent) {
+      this.hud.showMessage('Must deploy adjacent to astronef', 2000);
+      return;
+    }
+
+    // Check terrain validity for the unit type
+    const terrain = this.getTerrainAtHex(coord);
+    if (!terrain) {
+      this.hud.showMessage('Invalid hex', 2000);
+      return;
+    }
+
+    // Check if hex is occupied
+    const existingUnit = this.getUnitAtHex(coord);
+    if (existingUnit) {
+      this.hud.showMessage('Hex already occupied', 2000);
+      return;
+    }
+
+    // Deploy the unit (local optimistic update)
+    selectedUnit.position = coord;
+    this.deploymentInventory.setDeployedUnits([
+      ...this.gameState.units
+        .filter(u => u.type !== UnitType.Astronef && u.type !== UnitType.Tower && u.position !== null)
+        .map(u => u.id),
+      selectedUnit.id,
+    ]);
+    this.deploymentInventory.clearSelection();
+    this.selectedDeploymentUnitId = null;
+
+    // Update renderer
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+
+    this.hud.showMessage(`Deployed ${selectedUnit.type}`, 1500);
+    this.render();
+  }
+
+  /**
+   * Get neighboring hex coordinates
+   */
+  private getNeighbors(hex: HexCoord): HexCoord[] {
+    const directions = [
+      { q: 1, r: 0 },
+      { q: 1, r: -1 },
+      { q: 0, r: -1 },
+      { q: -1, r: 0 },
+      { q: -1, r: 1 },
+      { q: 0, r: 1 },
+    ];
+    return directions.map(d => ({ q: hex.q + d.q, r: hex.r + d.r }));
+  }
+
+  /**
+   * Handle hex click during Landing phase
+   * The astronef occupies 4 hexes (center + 3 podes for towers)
+   */
+  private handleLandingPhaseClick(coord: HexCoord): void {
+    if (!this.gameState) return;
+
+    // Check if the clicked hex is valid terrain for landing (Land or Marsh)
+    const terrain = this.getTerrainAtHex(coord);
+    if (!terrain || (terrain !== 'land' && terrain !== 'marsh')) {
+      this.hud.showMessage('Astronef must land on Land or Marsh terrain', 3000);
+      return;
+    }
+
+    // Calculate all 4 astronef hex positions (center + 3 podes)
+    const astronefPositions = this.calculateAstronefHexes(coord);
+
+    // Check all hexes are on valid terrain
+    for (const hex of astronefPositions) {
+      const hexTerrain = this.getTerrainAtHex(hex);
+      if (!hexTerrain || (hexTerrain !== 'land' && hexTerrain !== 'marsh')) {
+        this.hud.showMessage('All astronef hexes must be on Land or Marsh terrain', 3000);
+        return;
+      }
+    }
+
+    // Send the landing action with all 4 positions
+    const action: LandAstronefAction = {
+      type: 'LAND_ASTRONEF',
+      playerId: this.client['playerId'],
+      position: astronefPositions,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+    this.hud.showMessage('Landing astronef...', 2000);
+    // Server will send STATE_UPDATE with authoritative state
+  }
+
+  /**
+   * Calculate all 4 astronef hex positions (center + 3 podes)
+   * Uses current rotation state to determine orientation
+   */
+  private calculateAstronefHexes(center: HexCoord): HexCoord[] {
+    // Base astronef shape (rotation 0):
+    // Center hex plus 3 podes in a triangular formation
+    const basePodes: HexCoord[] = [
+      { q: 1, r: 0 },   // East
+      { q: 0, r: 1 },   // Southeast
+      { q: 1, r: -1 },  // Northeast
+    ];
+
+    // Apply rotation to each pode relative to center
+    const rotatedPodes = basePodes.map(pode =>
+      hexRotateAround(
+        { q: center.q + pode.q, r: center.r + pode.r },
+        center,
+        this.astronefRotation
+      )
+    );
+
+    return [center, ...rotatedPodes];
+  }
+
+  /**
+   * Update landing preview display (shows astronef outline on hover)
+   */
+  private updateLandingPreview(center: HexCoord): void {
+    this.landingPreviewCenter = center;
+    // Could add visual preview highlighting here in future
+    // For now, preview is implicit in click behavior
+  }
+
+  /**
+   * Get terrain type at a specific hex
+   */
+  private getTerrainAtHex(coord: HexCoord): string | null {
+    if (!this.gameState) return null;
+
+    const hex = this.gameState.terrain.find(
+      t => t.coord.q === coord.q && t.coord.r === coord.r
+    );
+    return hex ? hex.type : null;
   }
 
   /**
@@ -485,11 +846,44 @@ export class GameApp {
   private handleAction(action: any): void {
     if (!this.gameState) return;
 
-    if (action.type === 'MOVE') {
-      const unit = this.gameState.units.find((u) => u.id === action.unitId);
-      if (unit) {
-        unit.position = action.path[action.path.length - 1];
+    switch (action.type) {
+      case 'MOVE': {
+        const unit = this.gameState.units.find((u) => u.id === action.unitId);
+        if (unit) {
+          unit.position = action.path[action.path.length - 1];
+          this.render();
+        }
+        break;
+      }
+
+      case 'LAND_ASTRONEF': {
+        // Update astronef position
+        const astronef = this.gameState.units.find(
+          (u) => u.type === UnitType.Astronef && u.owner === action.playerId
+        );
+        if (astronef && action.position?.length >= 1) {
+          astronef.position = action.position[0];
+        }
+
+        // Update tower positions (positions 1, 2, 3 correspond to podes)
+        const towers = this.gameState.units.filter(
+          (u) => u.type === UnitType.Tower && u.owner === action.playerId
+        );
+        towers.forEach((tower, index) => {
+          if (action.position?.[index + 1]) {
+            tower.position = action.position[index + 1];
+          }
+        });
+
+        // Update player's astronef position
+        const player = this.gameState.players.find((p) => p.id === action.playerId);
+        if (player) {
+          player.astronefPosition = action.position;
+        }
+
+        this.hud.showMessage(`${player?.name || 'Player'} landed their astronef!`, 3000);
         this.render();
+        break;
       }
     }
   }
@@ -532,6 +926,33 @@ export class GameApp {
   }
 
   /**
+   * Handle authoritative state update from server
+   */
+  private handleStateUpdate(gameState: GameState): void {
+    // Replace local state with server's authoritative state
+    this.gameState = gameState;
+    this.updateGameState(gameState);
+
+    // Show appropriate message based on phase
+    if (gameState.phase === 'deployment') {
+      this.hud.showMessage('All astronefs landed! Deployment phase begins.', 4000);
+    } else {
+      // Find the current player name for messaging
+      const currentPlayer = gameState.players.find(p => p.id === gameState.currentPlayer);
+      if (currentPlayer) {
+        const isMe = gameState.currentPlayer === this.client['playerId'];
+        if (isMe) {
+          this.hud.showMessage('Your turn to land!', 3000);
+        } else {
+          this.hud.showMessage(`${currentPlayer.name}'s turn to land`, 2000);
+        }
+      }
+    }
+
+    this.render();
+  }
+
+  /**
    * Render the current frame
    */
   private render(): void {
@@ -564,6 +985,10 @@ export class GameApp {
 
     if (this.renderer) {
       this.renderer.destroy();
+    }
+
+    if (this.deploymentInventory) {
+      this.deploymentInventory.destroy();
     }
   }
 }

@@ -373,6 +373,19 @@ export interface LiftOffAction extends BaseAction {
   decision: 'now' | 'stay'; // Turn 21 only
 }
 
+// Landing phase action (Turn 1)
+export interface LandAstronefAction extends BaseAction {
+  type: 'LAND_ASTRONEF';
+  position: HexCoord[]; // 3 positions for astronef podes
+}
+
+// Deployment phase action (Turn 2)
+export interface DeployUnitAction extends BaseAction {
+  type: 'DEPLOY_UNIT';
+  unitId: UnitId;
+  position: HexCoord;
+}
+
 export interface EndTurnAction extends BaseAction {
   type: 'END_TURN';
   savedAP: number;
@@ -395,6 +408,8 @@ export type GameAction =
   | EnterAstronefAction
   | ExitAstronefAction
   | LiftOffAction
+  | LandAstronefAction
+  | DeployUnitAction
   | EndTurnAction
   | RebuildTowerAction;
 

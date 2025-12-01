@@ -2,6 +2,12 @@
  * Server-specific types for Full Metal Planète backend
  */
 
+// Import GameState from shared types
+import type { GameState as SharedGameState } from '../shared/game/types.js';
+
+// Re-export GameState type
+export type GameState = SharedGameState;
+
 // Player colors
 export type PlayerColor = 'red' | 'blue' | 'green' | 'yellow';
 
@@ -15,6 +21,7 @@ export type WSMessageType =
   | 'PLAYER_READY'
   | 'GAME_START'
   | 'ACTION'
+  | 'STATE_UPDATE'
   | 'TURN_END'
   | 'GAME_END'
   | 'ERROR'
@@ -27,6 +34,7 @@ export type WSMessageType =
 // Action types from game
 export type ActionType =
   | 'MOVE'
+  | 'LAND_ASTRONEF'
   | 'LOAD'
   | 'UNLOAD'
   | 'FIRE'
@@ -60,27 +68,7 @@ export interface GameRoom {
   gameState?: GameState;
 }
 
-// Simplified GameState for server storage
-export interface GameState {
-  gameId: string;
-  turn: number;
-  phase: string;
-  currentPlayer: string;
-  turnOrder: string[];
-  turnStartTime: number;
-  turnTimeLimit: number;
-  actionPoints: number;
-  savedActionPoints: Record<string, number>;
-  currentTide: string;
-  tideDeck: string[];
-  tideDiscard: string[];
-  units: any[];
-  minerals: any[];
-  bridges: any[];
-  players: Player[];
-  liftOffDecisions: Record<string, boolean | null>;
-  scores?: Record<string, number>;
-}
+// GameState is re-exported from shared/game/types.js (see top of file)
 
 // Game action from client
 export interface GameAction {

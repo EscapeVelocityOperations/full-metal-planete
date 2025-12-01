@@ -52,34 +52,58 @@ export function generateHexVertices(size: number): Array<[number, number]> {
 }
 
 /**
- * Convert axial hex coordinates to pixel coordinates (flat-top)
- * @param q - Axial q coordinate
- * @param r - Axial r coordinate
- * @param size - Hex size
+ * Convert axial hex coordinates to pixel coordinates (flat-top, offset columns)
+ * Uses "odd-q" offset layout matching the official Full Metal Planète board
+ * where odd columns are shifted down by half a hex height
+ * @param q - Axial q coordinate (column)
+ * @param r - Axial r coordinate (row)
+ * @param size - Hex size (distance from center to vertex)
  * @returns Pixel position
  */
 export function axialToPixel(q: number, r: number, size: number): Point {
-  const x = size * ((3 / 2) * q);
-  const y = size * ((Math.sqrt(3) / 2) * q + Math.sqrt(3) * r);
+  // Flat-top hex dimensions
+  const hexWidth = size * 2;        // Width: 2 * size
+  const hexHeight = size * Math.sqrt(3); // Height: sqrt(3) * size
+
+  // Horizontal spacing: 3/4 of hex width (hexes overlap by 1/4)
+  const horizSpacing = hexWidth * 0.75;
+
+  // Vertical spacing: full hex height
+  const vertSpacing = hexHeight;
+
+  // X position: columns are evenly spaced
+  const x = q * horizSpacing;
+
+  // Y position: rows are evenly spaced, but odd columns are offset down by half
+  const oddColumnOffset = (q % 2 !== 0) ? hexHeight / 2 : 0;
+  const y = r * vertSpacing + oddColumnOffset;
 
   return { x, y };
 }
 
 /**
- * Convert pixel coordinates to axial hex coordinates (flat-top)
- * Uses fractional cube coordinate rounding algorithm
+ * Convert pixel coordinates to axial hex coordinates (flat-top, offset columns)
+ * Matches the "odd-q" offset layout of the official Full Metal Planète board
  * @param x - Pixel x coordinate
  * @param y - Pixel y coordinate
  * @param size - Hex size
  * @returns Nearest hex coordinate
  */
 export function pixelToAxial(x: number, y: number, size: number): HexCoord {
-  // Convert pixel to fractional axial coordinates
-  const q = ((2 / 3) * x) / size;
-  const r = ((-1 / 3) * x + (Math.sqrt(3) / 3) * y) / size;
+  // Flat-top hex dimensions
+  const hexWidth = size * 2;
+  const hexHeight = size * Math.sqrt(3);
+  const horizSpacing = hexWidth * 0.75;
+  const vertSpacing = hexHeight;
 
-  // Round to nearest hex using cube coordinate rounding
-  return hexRound(q, r);
+  // First, estimate the column (q)
+  const q = Math.round(x / horizSpacing);
+
+  // Then calculate the row (r), accounting for odd column offset
+  const oddColumnOffset = (q % 2 !== 0) ? hexHeight / 2 : 0;
+  const r = Math.round((y - oddColumnOffset) / vertSpacing);
+
+  return { q, r };
 }
 
 /**

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <!-- Astronef - Flying saucer/UFO style airship -->
+  <defs>
+    <linearGradient id="astronef-body" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#E0E0E0"/>
+      <stop offset="50%" style="stop-color:#A0A0A0"/>
+      <stop offset="100%" style="stop-color:#707070"/>
+    </linearGradient>
+  </defs>
+  <!-- Main saucer body -->
+  <ellipse cx="30" cy="26" rx="18" ry="8" fill="url(#astronef-body)" stroke="#505050" stroke-width="1"/>
+  <!-- Dome -->
+  <ellipse cx="30" cy="22" rx="10" ry="6" fill="#87CEEB" opacity="0.7" stroke="#505050" stroke-width="0.5"/>
+  <!-- Engine glow -->
+  <ellipse cx="30" cy="32" rx="8" ry="3" fill="#00FFFF" opacity="0.5"/>
+  <!-- Lights -->
+  <circle cx="20" cy="26" r="2" fill="#FF0000"/>
+  <circle cx="30" cy="28" r="2" fill="#00FF00"/>
+  <circle cx="40" cy="26" r="2" fill="#FF0000"/>
+</svg>

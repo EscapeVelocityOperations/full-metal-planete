@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <defs>
+    <pattern id="coral" patternUnits="userSpaceOnUse" width="12" height="12">
+      <circle cx="3" cy="3" r="1.5" fill="#8A9AB8" opacity="0.4"/>
+      <circle cx="9" cy="9" r="1" fill="#8A9AB8" opacity="0.3"/>
+    </pattern>
+  </defs>
+  <!-- Flat-top hex shape - shallow water with coral -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#7A8BA8"/>
+  <!-- Coral pattern -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="url(#coral)"/>
+  <!-- Reef filled dot indicator (matches original map legend) -->
+  <circle cx="30" cy="26" r="5" fill="#5A6A88"/>
+  <!-- Border -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#6A7A98" stroke-width="0.5"/>
+</svg>
