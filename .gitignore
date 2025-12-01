@@ -30,3 +30,5 @@ Thumbs.db
 
 # Temp files
 1
+/.playwright-mcp
+/e2e-screenshots
