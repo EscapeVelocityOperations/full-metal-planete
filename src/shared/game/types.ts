@@ -417,6 +417,89 @@ export type GameAction =
 // 10. Game Constants
 // ============================================================================
 
+// ============================================================================
+// 10b. Multi-Hex Unit Shapes
+// ============================================================================
+
+/**
+ * Multi-hex unit shape definitions.
+ * Offsets are relative to the "position" (anchor) hex.
+ * For Astronef: center hex + 3 podes in a Y shape
+ * For Barge: 2 hexes in a line (anchor + 1 neighbor)
+ */
+export interface UnitShape {
+  hexCount: number;
+  /** Relative hex offsets from anchor (first is always {q:0, r:0}) */
+  offsets: HexCoord[];
+  /** Whether the shape can be rotated during placement */
+  canRotate: boolean;
+}
+
+/**
+ * Get relative hex offsets for multi-hex units.
+ * Single-hex units return just the anchor [{q:0, r:0}].
+ * Astronef: 4 hexes - center + 3 podes in Y pattern
+ * Barge: 2 hexes - line of 2
+ */
+export const UNIT_SHAPES: Record<UnitType, UnitShape> = {
+  [UnitType.Astronef]: {
+    hexCount: 4,
+    // Center + 3 podes: NE, W, SE (flat-top hex, forms a Y with tower at SE)
+    offsets: [
+      { q: 0, r: 0 },   // Center (anchor/main body)
+      { q: 1, r: -1 },  // Pode 1: Northeast (upper right)
+      { q: -1, r: 0 },  // Pode 2: West (left)
+      { q: 0, r: 1 },   // Pode 3: Southeast (lower right, tower position)
+    ],
+    canRotate: true,
+  },
+  [UnitType.Barge]: {
+    hexCount: 2,
+    // Line of 2 hexes: anchor + East neighbor
+    offsets: [
+      { q: 0, r: 0 },   // Anchor
+      { q: 1, r: 0 },   // East neighbor
+    ],
+    canRotate: true,
+  },
+  // Single-hex units
+  [UnitType.Tower]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+  [UnitType.Tank]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+  [UnitType.SuperTank]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+  [UnitType.MotorBoat]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+  [UnitType.Crab]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+  [UnitType.Converter]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+  [UnitType.Bridge]: {
+    hexCount: 1,
+    offsets: [{ q: 0, r: 0 }],
+    canRotate: false,
+  },
+};
+
 export const GAME_CONSTANTS = {
   // Turns
   MIN_TURNS: 21,

@@ -15,7 +15,8 @@ import {
   TERRAIN_COLORS,
 } from '../types';
 import type { Unit, PlayerColor } from '@/shared/game/types';
-import { UnitType, PlayerColor as PlayerColorEnum } from '@/shared/game/types';
+import { UnitType, PlayerColor as PlayerColorEnum, UNIT_SHAPES } from '@/shared/game/types';
+import { getUnitFootprint } from '@/shared/game/hex';
 
 // Zoom configuration
 const MIN_ZOOM = 0.3;
@@ -62,7 +63,7 @@ function getTerrainColorHex(terrainType: TerrainType, tide: TideLevel): string {
   return rgbToHex(color[0], color[1], color[2]);
 }
 
-// Unit type to symbol mapping
+// Unit type to symbol mapping (for non-sprite mode)
 const UNIT_SYMBOLS: Record<UnitType, string> = {
   [UnitType.Astronef]: '\u25C6', // Diamond
   [UnitType.Tower]: '\u25B2', // Triangle up
@@ -73,6 +74,19 @@ const UNIT_SYMBOLS: Record<UnitType, string> = {
   [UnitType.Crab]: '\u2739', // Star
   [UnitType.Converter]: '\u25CE', // Bullseye
   [UnitType.Bridge]: '\u2550', // Double horizontal
+};
+
+// Unit type to sprite filename mapping
+const UNIT_SPRITE_NAMES: Record<UnitType, string> = {
+  [UnitType.Astronef]: 'astronef',
+  [UnitType.Tower]: 'tower',
+  [UnitType.Tank]: 'tank',
+  [UnitType.SuperTank]: 'supertank',
+  [UnitType.MotorBoat]: 'motorboat',
+  [UnitType.Barge]: 'barge',
+  [UnitType.Crab]: 'crab',
+  [UnitType.Converter]: 'converter',
+  [UnitType.Bridge]: 'bridge',
 };
 
 // Player color to CSS color mapping
@@ -96,7 +110,6 @@ export class CSSHexRenderer {
   private unitElements: Map<string, HTMLDivElement> = new Map();
   private currentTide: TideLevel = TideLevel.Normal;
   private viewport: Viewport;
-  private useSpriteMode: boolean = false;
   private mapBounds: { minX: number; minY: number; maxX: number; maxY: number } = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   private zoomChangeCallbacks: Set<(zoom: number) => void> = new Set();
 
@@ -176,13 +189,50 @@ export class CSSHexRenderer {
       }
 
       .hex-cell.sprite-mode {
-        background-size: contain;
+        background-size: 100% 100%;
         background-repeat: no-repeat;
         background-position: center;
+        clip-path: none;  /* SVG sprites already have hex shape */
       }
 
       .hex-cell:hover {
         filter: brightness(1.2);
+      }
+
+      /* Marsh indicator - diagonal stripes pattern */
+      .hex-cell.terrain-marsh::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: repeating-linear-gradient(
+          45deg,
+          rgba(100, 180, 100, 0.35),
+          rgba(100, 180, 100, 0.35) 3px,
+          transparent 3px,
+          transparent 8px
+        );
+        pointer-events: none;
+      }
+
+      /* Reef indicator - dotted/rocky pattern */
+      .hex-cell.terrain-reef::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background:
+          radial-gradient(circle at 20% 30%, rgba(150, 100, 50, 0.5) 2px, transparent 2px),
+          radial-gradient(circle at 60% 20%, rgba(150, 100, 50, 0.5) 2px, transparent 2px),
+          radial-gradient(circle at 40% 60%, rgba(150, 100, 50, 0.5) 2px, transparent 2px),
+          radial-gradient(circle at 80% 50%, rgba(150, 100, 50, 0.5) 2px, transparent 2px),
+          radial-gradient(circle at 30% 80%, rgba(150, 100, 50, 0.5) 2px, transparent 2px),
+          radial-gradient(circle at 70% 75%, rgba(150, 100, 50, 0.5) 2px, transparent 2px);
+        pointer-events: none;
       }
 
       .hex-cell .hex-content {
@@ -217,6 +267,21 @@ export class CSSHexRenderer {
 
       .unit-marker.tower {
         font-size: 20px;
+      }
+
+      /* Unit sprite mode */
+      .unit-marker.sprite-mode {
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+      }
+
+      .unit-marker.sprite-mode .unit-sprite {
+        width: 100%;
+        height: 100%;
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
       }
     `;
     document.head.appendChild(style);
@@ -323,8 +388,11 @@ export class CSSHexRenderer {
     this.unitsContainer.innerHTML = '';
     this.unitElements.clear();
 
-    // Create unit elements
+    // Create unit elements (only for units with a position on the map)
     for (const unit of this.units) {
+      // Skip units without a position (not yet placed / in inventory)
+      if (!unit.position) continue;
+
       const element = this.createUnitElement(unit);
       this.unitElements.set(unit.id, element);
       this.unitsContainer.appendChild(element);
@@ -332,36 +400,152 @@ export class CSSHexRenderer {
   }
 
   /**
-   * Create a single unit element
+   * Create unit element(s) for a unit.
+   * For multi-hex units (Astronef, Barge), creates a marker on each occupied hex.
+   * Returns a container div with all markers for the unit.
    */
   private createUnitElement(unit: Unit): HTMLDivElement {
-    const element = document.createElement('div');
-    element.className = `unit-marker ${unit.type}`;
-    element.dataset.unitId = unit.id;
-    element.dataset.unitType = unit.type;
-    element.dataset.owner = unit.owner;
+    // Container for all hex markers of this unit
+    const container = document.createElement('div');
+    container.className = `unit-container ${unit.type}`;
+    container.dataset.unitId = unit.id;
+    container.dataset.unitType = unit.type;
+    container.dataset.owner = unit.owner;
 
-    // Get symbol and color
-    const symbol = UNIT_SYMBOLS[unit.type] || '?';
-    // Extract player color from owner (e.g., "player-red" -> "red")
-    const ownerColor = unit.owner.replace('player-', '');
+    // Extract player color from owner (e.g., "player-red" -> "red", "lab-team1-red" -> "red")
+    const ownerParts = unit.owner.split('-');
+    const ownerColor = ownerParts[ownerParts.length - 1];
     const color = PLAYER_COLORS[ownerColor] || '#ffffff';
 
-    element.textContent = symbol;
-    element.style.color = color;
+    // Get all hexes occupied by this unit
+    const footprint = getUnitFootprint(unit.type, unit.position!, unit.rotation || 0);
 
-    // Calculate pixel position
-    const pos = axialToPixel(unit.position.q, unit.position.r, HEX_SIZE);
-
-    // Position the unit at hex center
     const hexWidth = HEX_SIZE * 2;
     const hexHeight = HEX_SIZE * Math.sqrt(3);
-    element.style.left = `${pos.x - hexWidth / 2}px`;
-    element.style.top = `${pos.y - hexHeight / 2}px`;
-    element.style.width = `${hexWidth}px`;
-    element.style.height = `${hexHeight}px`;
 
-    return element;
+    // Get sprite filename for this unit type
+    const spriteName = UNIT_SPRITE_NAMES[unit.type] || 'tank';
+
+    // Special handling for Astronef - sprite spans 4 hexes in Y shape
+    if (unit.type === UnitType.Astronef && footprint.length === 4) {
+      const marker = document.createElement('div');
+      marker.className = `unit-marker ${unit.type} astronef-span`;
+
+      // Calculate center of the astronef (center of bounding box of all 4 hexes)
+      const positions = footprint.map(hex => axialToPixel(hex.q, hex.r, HEX_SIZE));
+      const centerX = positions.reduce((sum, p) => sum + p.x, 0) / positions.length;
+      const centerY = positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
+
+      // Astronef spans approximately 3 hexes wide and 2.5 hexes tall (Y shape)
+      const astronefWidth = hexWidth * 2.5;
+      const astronefHeight = hexHeight * 2.5;
+
+      marker.style.position = 'absolute';
+      marker.style.left = `${centerX - astronefWidth / 2}px`;
+      marker.style.top = `${centerY - astronefHeight / 2}px`;
+      marker.style.width = `${astronefWidth}px`;
+      marker.style.height = `${astronefHeight}px`;
+      marker.classList.add('sprite-mode');
+      marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+      marker.style.backgroundSize = 'contain';
+      marker.style.backgroundRepeat = 'no-repeat';
+      marker.style.backgroundPosition = 'center';
+      marker.style.zIndex = '1'; // Lower z-index so Tower can layer on top
+
+      // Apply rotation (each step is 60 degrees)
+      if (unit.rotation && unit.rotation !== 0) {
+        marker.style.transform = `rotate(${unit.rotation * 60}deg)`;
+      }
+
+      container.appendChild(marker);
+    }
+    // Special handling for Barge - sprite spans 2 hexes
+    else if (unit.type === UnitType.Barge && footprint.length === 2) {
+      const marker = document.createElement('div');
+      marker.className = `unit-marker ${unit.type} barge-span`;
+
+      // Calculate midpoint between the two hexes
+      const pos1 = axialToPixel(footprint[0].q, footprint[0].r, HEX_SIZE);
+      const pos2 = axialToPixel(footprint[1].q, footprint[1].r, HEX_SIZE);
+      const midX = (pos1.x + pos2.x) / 2;
+      const midY = (pos1.y + pos2.y) / 2;
+
+      // Calculate angle between hexes for rotation
+      const angle = Math.atan2(pos2.y - pos1.y, pos2.x - pos1.x) * (180 / Math.PI);
+
+      // Barge spans 2 hexes horizontally (wider element)
+      const bargeWidth = hexWidth * 1.8;
+      marker.style.position = 'absolute';
+      marker.style.left = `${midX - bargeWidth / 2}px`;
+      marker.style.top = `${midY - hexHeight / 2}px`;
+      marker.style.width = `${bargeWidth}px`;
+      marker.style.height = `${hexHeight}px`;
+      marker.classList.add('sprite-mode');
+      marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+      marker.style.backgroundSize = 'contain';
+      marker.style.backgroundRepeat = 'no-repeat';
+      marker.style.backgroundPosition = 'center';
+      marker.style.zIndex = '1';
+      marker.style.transform = `rotate(${angle}deg)`;
+
+      container.appendChild(marker);
+    }
+    // Special handling for Tower - higher z-index to layer over Astronef
+    else if (unit.type === UnitType.Tower) {
+      const pos = axialToPixel(footprint[0].q, footprint[0].r, HEX_SIZE);
+      const marker = document.createElement('div');
+      marker.className = `unit-marker ${unit.type} tower-overlay`;
+
+      marker.style.position = 'absolute';
+      marker.style.left = `${pos.x - hexWidth / 2}px`;
+      marker.style.top = `${pos.y - hexHeight / 2}px`;
+      marker.style.width = `${hexWidth}px`;
+      marker.style.height = `${hexHeight}px`;
+      marker.classList.add('sprite-mode');
+      marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+      marker.style.backgroundSize = 'contain';
+      marker.style.backgroundRepeat = 'no-repeat';
+      marker.style.backgroundPosition = 'center';
+      marker.style.zIndex = '10'; // Higher z-index to layer over Astronef
+
+      container.appendChild(marker);
+    } else {
+      // Standard rendering for single-hex and other multi-hex units
+      footprint.forEach((hex, index) => {
+        const marker = document.createElement('div');
+        marker.className = `unit-marker ${unit.type}`;
+
+        // Calculate pixel position for this hex
+        const pos = axialToPixel(hex.q, hex.r, HEX_SIZE);
+        marker.style.position = 'absolute';
+        marker.style.left = `${pos.x - hexWidth / 2}px`;
+        marker.style.top = `${pos.y - hexHeight / 2}px`;
+        marker.style.width = `${hexWidth}px`;
+        marker.style.height = `${hexHeight}px`;
+
+        // Always use sprites for units
+        marker.classList.add('sprite-mode');
+        // For multi-hex units, show sprite only on anchor hex (index 0)
+        // Secondary hexes show a colored dot
+        if (index === 0) {
+          marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+          // Apply rotation transform for units that support it
+          if (unit.rotation && unit.rotation !== 0) {
+            marker.style.transform = `rotate(${unit.rotation * 60}deg)`;
+          }
+        } else {
+          // Secondary hex indicator
+          marker.style.backgroundColor = color;
+          marker.style.opacity = '0.5';
+          marker.style.borderRadius = '50%';
+          marker.style.transform = 'scale(0.3)';
+        }
+
+        container.appendChild(marker);
+      });
+    }
+
+    return container;
   }
 
   /**
@@ -425,6 +609,13 @@ export class CSSHexRenderer {
     element.dataset.r = String(hex.coord.r);
     element.dataset.terrain = hex.type;
 
+    // Add terrain-specific class for visual indicators (marsh/reef patterns)
+    if (hex.type === TerrainType.Marsh) {
+      element.classList.add('terrain-marsh');
+    } else if (hex.type === TerrainType.Reef) {
+      element.classList.add('terrain-reef');
+    }
+
     // Calculate pixel position
     const pos = axialToPixel(hex.coord.q, hex.coord.r, HEX_SIZE);
 
@@ -434,13 +625,8 @@ export class CSSHexRenderer {
     element.style.left = `${pos.x - hexWidth / 2}px`;
     element.style.top = `${pos.y - hexHeight / 2}px`;
 
-    // Set color based on terrain type and tide
-    if (this.useSpriteMode) {
-      element.classList.add('sprite-mode');
-      element.style.backgroundImage = `url(/sprites/terrain/${hex.type}.svg)`;
-    } else {
-      element.style.backgroundColor = getTerrainColorHex(hex.type, this.currentTide);
-    }
+    // Set color based on terrain type and tide (always use symbols for terrain)
+    element.style.backgroundColor = getTerrainColorHex(hex.type, this.currentTide);
 
     return element;
   }
@@ -452,11 +638,11 @@ export class CSSHexRenderer {
     if (this.currentTide === tide) return;
     this.currentTide = tide;
 
-    // Update all hex colors
+    // Update all hex colors (always use colors for terrain)
     for (const hex of this.terrainHexes) {
       const key = `${hex.coord.q},${hex.coord.r}`;
       const element = this.hexElements.get(key);
-      if (element && !this.useSpriteMode) {
+      if (element) {
         element.style.backgroundColor = getTerrainColorHex(hex.type, this.currentTide);
       }
     }
@@ -489,16 +675,6 @@ export class CSSHexRenderer {
     this.gridContainer.style.transform = `scale(${zoom})`;
   }
 
-  /**
-   * Enable or disable sprite mode
-   */
-  setSpriteMode(enabled: boolean): void {
-    this.useSpriteMode = enabled;
-    // Rebuild grid to apply sprite mode
-    if (this.terrainHexes.length > 0) {
-      this.rebuildGrid();
-    }
-  }
 
   /**
    * Render frame (no-op for CSS renderer - browser handles rendering)

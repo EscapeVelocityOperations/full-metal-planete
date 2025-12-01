@@ -5,7 +5,8 @@
  * neighbor finding, and range utilities for flat-top hexagonal grids.
  */
 
-import type { HexCoord, CubeCoord } from './types';
+import type { HexCoord, CubeCoord, UnitType } from './types';
+import { UNIT_SHAPES } from './types';
 
 // ============================================================================
 // Flat-Top Hex Directions
@@ -276,4 +277,96 @@ export function hexRotateAround(hex: HexCoord, center: HexCoord, steps: number):
     q: relative.q + center.q,
     r: relative.r + center.r,
   };
+}
+
+// ============================================================================
+// Multi-Hex Unit Footprint
+// ============================================================================
+
+/**
+ * Get the actual hex coordinates occupied by a unit at a given position with rotation.
+ * For single-hex units, returns just the position.
+ * For multi-hex units, returns all hexes based on shape and rotation.
+ *
+ * @param unitType - Type of unit
+ * @param anchor - The anchor/position hex of the unit
+ * @param rotation - Rotation steps (0-5, each step is 60 degrees clockwise)
+ * @returns Array of hex coordinates occupied by the unit
+ */
+export function getUnitFootprint(
+  unitType: UnitType,
+  anchor: HexCoord,
+  rotation: number = 0
+): HexCoord[] {
+  const shape = UNIT_SHAPES[unitType];
+  if (!shape) {
+    return [anchor];
+  }
+
+  // Normalize rotation to 0-5
+  const normalizedRotation = ((rotation % 6) + 6) % 6;
+
+  return shape.offsets.map(offset => {
+    // First rotate the offset around origin
+    let rotatedOffset = offset;
+    for (let i = 0; i < normalizedRotation; i++) {
+      rotatedOffset = hexRotateClockwise(rotatedOffset);
+    }
+
+    // Then translate to anchor position
+    return {
+      q: anchor.q + rotatedOffset.q,
+      r: anchor.r + rotatedOffset.r,
+    };
+  });
+}
+
+/**
+ * Check if a unit placement is valid (no overlapping hexes with existing units).
+ *
+ * @param unitType - Type of unit being placed
+ * @param anchor - The anchor/position hex for the unit
+ * @param rotation - Rotation steps (0-5)
+ * @param occupiedHexes - Set of hex keys that are already occupied
+ * @returns True if placement is valid
+ */
+export function isPlacementValid(
+  unitType: UnitType,
+  anchor: HexCoord,
+  rotation: number,
+  occupiedHexes: Set<string>
+): boolean {
+  const footprint = getUnitFootprint(unitType, anchor, rotation);
+
+  for (const hex of footprint) {
+    const key = hexKey(hex);
+    if (occupiedHexes.has(key)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Get all hexes occupied by all placed units.
+ *
+ * @param units - Array of units with position and rotation
+ * @returns Set of hex keys that are occupied
+ */
+export function getOccupiedHexes(
+  units: Array<{ type: UnitType; position: HexCoord | null; rotation?: number }>
+): Set<string> {
+  const occupied = new Set<string>();
+
+  for (const unit of units) {
+    if (!unit.position) continue;
+
+    const footprint = getUnitFootprint(unit.type, unit.position, unit.rotation || 0);
+    for (const hex of footprint) {
+      occupied.add(hexKey(hex));
+    }
+  }
+
+  return occupied;
 }

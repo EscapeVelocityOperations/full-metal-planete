@@ -13,12 +13,12 @@ export interface DeploymentInventoryConfig {
 
 // Unit type display info
 const UNIT_INFO: Record<UnitType, { name: string; symbol: string; description: string }> = {
-  [UnitType.Astronef]: { name: 'Astronef', symbol: '\u25C6', description: 'Main spacecraft (already deployed)' },
-  [UnitType.Tower]: { name: 'Tower', symbol: '\u25B2', description: 'Defensive tower (already deployed)' },
+  [UnitType.Astronef]: { name: 'Astronef', symbol: '\u25C6', description: 'Main spacecraft (4 hexes, rotatable)' },
+  [UnitType.Tower]: { name: 'Tower', symbol: '\u25B2', description: 'Defensive tower' },
   [UnitType.Tank]: { name: 'Tank', symbol: '\u25A0', description: 'Main combat unit (1 AP/hex)' },
   [UnitType.SuperTank]: { name: 'Super Tank', symbol: '\u25A0\u25A0', description: 'Heavy combat unit (2 AP/hex)' },
   [UnitType.MotorBoat]: { name: 'Motor Boat', symbol: '\u25BA', description: 'Fast water unit (1 AP/hex on water)' },
-  [UnitType.Barge]: { name: 'Barge', symbol: '\u25AC', description: 'Transport unit (can carry units)' },
+  [UnitType.Barge]: { name: 'Barge', symbol: '\u25AC', description: 'Transport unit (2 hexes, can carry units)' },
   [UnitType.Crab]: { name: 'Crab', symbol: '\u2739', description: 'Amphibious unit (works on all terrain)' },
   [UnitType.Converter]: { name: 'Converter', symbol: '\u25CE', description: 'Mineral converter (extracts minerals)' },
   [UnitType.Bridge]: { name: 'Bridge', symbol: '\u2550', description: 'Creates land crossing over water' },
@@ -197,12 +197,13 @@ export class DeploymentInventory {
 
   /**
    * Set the units available for deployment
+   * Note: Tower is excluded as it deploys automatically with the Astronef
    */
   setUnits(units: Unit[]): void {
     // Filter to only include units owned by this player that can be deployed
+    // Tower is excluded since it's auto-deployed with Astronef
     this.units = units.filter(u =>
       u.owner.includes(this.config.playerColor) &&
-      u.type !== UnitType.Astronef &&
       u.type !== UnitType.Tower
     );
     this.render();

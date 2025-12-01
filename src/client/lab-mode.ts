@@ -7,7 +7,7 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { DeploymentInventory } from './ui/deployment-inventory';
 import { UnitType, type GameState, type HexCoord, type Unit, type TideLevel, type PlayerColor, type Player } from '@/shared/game/types';
-import { hexRotateAround } from '@/shared/game/hex';
+import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValid, hexKey } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 
 interface LabModeConfig {
@@ -611,19 +611,28 @@ export class LabMode {
   private handleHexClick(coord: HexCoord): void {
     if (!this.selectedUnit) return;
 
-    // Check if hex is occupied
-    const existingUnit = this.gameState.units.find(
-      u => u.position?.q === coord.q && u.position?.r === coord.r
+    // Get all currently occupied hexes (excluding the unit being placed)
+    const otherUnits = this.gameState.units.filter(u =>
+      u.id !== this.selectedUnit!.id && u.position !== null
     );
+    const occupiedHexes = getOccupiedHexes(otherUnits);
 
-    if (existingUnit) {
-      console.log('Hex occupied');
+    // Check if placement is valid for multi-hex units
+    const rotation = this.selectedUnit.rotation || 0;
+    if (!isPlacementValid(this.selectedUnit.type, coord, rotation, occupiedHexes)) {
+      console.log('Invalid placement - would overlap with existing units');
       return;
     }
 
     // Place the unit
     this.selectedUnit.position = coord;
-    console.log('Placed unit at', coord);
+    console.log('Placed unit at', coord, 'rotation:', rotation);
+
+    // Log footprint for multi-hex units
+    const footprint = getUnitFootprint(this.selectedUnit.type, coord, rotation);
+    if (footprint.length > 1) {
+      console.log('Unit footprint:', footprint.map(h => `(${h.q},${h.r})`).join(', '));
+    }
 
     // Update renderer
     if (this.renderer?.setUnits) {
@@ -638,11 +647,15 @@ export class LabMode {
 
   /**
    * Handle hex right click - remove unit
+   * For multi-hex units, right-clicking any occupied hex removes the unit
    */
   private handleHexRightClick(coord: HexCoord): void {
-    const unit = this.gameState.units.find(
-      u => u.position?.q === coord.q && u.position?.r === coord.r
-    );
+    // Find unit that occupies this hex (check all footprint hexes)
+    const unit = this.gameState.units.find(u => {
+      if (!u.position) return false;
+      const footprint = getUnitFootprint(u.type, u.position, u.rotation || 0);
+      return footprint.some(h => h.q === coord.q && h.r === coord.r);
+    });
 
     if (unit) {
       unit.position = null;
