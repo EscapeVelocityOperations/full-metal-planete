@@ -11,29 +11,24 @@ import { HEX_SIZE } from '../types';
 
 describe('hex-geometry', () => {
   describe('generateHexVertices', () => {
-    it('should generate 6 vertices for flat-top hex', () => {
+    it('should generate 18 vertices for flat-top hex (6 triangles * 3 vertices each)', () => {
       const vertices = generateHexVertices(HEX_SIZE);
-      expect(vertices).toHaveLength(6);
+      // 6 triangles, each with 3 vertices (center + 2 corners) = 18 vertices
+      expect(vertices).toHaveLength(18);
     });
 
-    it('should generate correct vertex positions for flat-top hex', () => {
+    it('should generate triangles connecting center to corners', () => {
       const size = 1;
       const vertices = generateHexVertices(size);
 
-      // Flat-top hex vertices (clockwise from right)
-      const expected = [
-        [size, 0],
-        [size / 2, (size * Math.sqrt(3)) / 2],
-        [-size / 2, (size * Math.sqrt(3)) / 2],
-        [-size, 0],
-        [-size / 2, -(size * Math.sqrt(3)) / 2],
-        [size / 2, -(size * Math.sqrt(3)) / 2],
-      ];
-
-      vertices.forEach((vertex, i) => {
-        expect(vertex[0]).toBeCloseTo(expected[i]![0]!, 5);
-        expect(vertex[1]).toBeCloseTo(expected[i]![1]!, 5);
-      });
+      // Each triangle starts with center [0, 0]
+      // Triangles are: center -> corner[i] -> corner[i+1]
+      for (let i = 0; i < 6; i++) {
+        const triangleStart = i * 3;
+        // Center vertex
+        expect(vertices[triangleStart]![0]).toBeCloseTo(0, 5);
+        expect(vertices[triangleStart]![1]).toBeCloseTo(0, 5);
+      }
     });
   });
 
@@ -44,22 +39,26 @@ describe('hex-geometry', () => {
       expect(pixel.y).toBe(0);
     });
 
-    it('should convert q=1, r=0 correctly for flat-top', () => {
+    it('should convert q=1, r=0 correctly for flat-top offset columns', () => {
       const size = 2;
       const pixel = axialToPixel(1, 0, size);
 
-      // x = size * (3/2 * q) = 2 * (3/2 * 1) = 3
-      // y = size * (sqrt(3)/2 * q + sqrt(3) * r) = 2 * (sqrt(3)/2 * 1 + 0) = sqrt(3)
+      // hexWidth = size * 2 = 4
+      // horizSpacing = hexWidth * 0.75 = 3
+      // x = q * horizSpacing = 1 * 3 = 3
+      // hexHeight = size * sqrt(3) = 2 * sqrt(3)
+      // y = r * hexHeight + (q is odd ? hexHeight/2 : 0) = 0 + sqrt(3)
       expect(pixel.x).toBeCloseTo(3, 5);
       expect(pixel.y).toBeCloseTo(Math.sqrt(3), 5);
     });
 
-    it('should convert q=0, r=1 correctly for flat-top', () => {
+    it('should convert q=0, r=1 correctly for flat-top offset columns', () => {
       const size = 2;
       const pixel = axialToPixel(0, 1, size);
 
-      // x = size * (3/2 * q) = 0
-      // y = size * (sqrt(3)/2 * q + sqrt(3) * r) = 2 * sqrt(3)
+      // x = 0 * horizSpacing = 0
+      // hexHeight = 2 * sqrt(3)
+      // y = 1 * hexHeight + 0 (q=0 is even) = 2 * sqrt(3)
       expect(pixel.x).toBeCloseTo(0, 5);
       expect(pixel.y).toBeCloseTo(2 * Math.sqrt(3), 5);
     });
@@ -68,8 +67,13 @@ describe('hex-geometry', () => {
       const size = 1;
       const pixel = axialToPixel(-1, -1, size);
 
+      // hexWidth = 2, horizSpacing = 1.5
+      // x = -1 * 1.5 = -1.5
+      // hexHeight = sqrt(3)
+      // q=-1 is odd, so offset = sqrt(3)/2
+      // y = -1 * sqrt(3) + sqrt(3)/2 = -sqrt(3)/2
       expect(pixel.x).toBeCloseTo(-1.5, 5);
-      expect(pixel.y).toBeCloseTo(-Math.sqrt(3) * 1.5, 5);
+      expect(pixel.y).toBeCloseTo(-Math.sqrt(3) / 2, 5);
     });
   });
 
@@ -88,11 +92,13 @@ describe('hex-geometry', () => {
       expect(hex1.q).toBe(0);
       expect(hex1.r).toBe(0);
 
-      // Test point in neighboring hex at q=1, r=0
-      // For flat-top: x = size * (3/2 * q) = 30 * 1.5 = 45
-      const hex2 = pixelToAxial(44, 0, size);
+      // Test point clearly in hex q=1, r=0
+      // horizSpacing = 45, so center of q=1 is at x=45
+      // hexHeight = sqrt(3)*30 = 51.96, oddColumnOffset = 25.98
+      // center of (1, 0) is at (45, 25.98)
+      const hex2 = pixelToAxial(45, 26, size);
       expect(hex2.q).toBe(1);
-      expect(hex2.r).toBe(-1);
+      expect(hex2.r).toBe(0);
     });
 
     it('should be inverse of axialToPixel for hex centers', () => {

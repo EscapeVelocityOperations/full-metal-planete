@@ -13,6 +13,21 @@ import {
   calculateScore,
   advanceTurn,
   drawTideCard,
+  rotateTurnOrder,
+  isPlayersTurn,
+  isTurnTimerExpired,
+  getRemainingTurnTime,
+  calculateInitialTurnOrder,
+  handleTurnTimeout,
+  validateLandAstronefAction,
+  applyLandAstronefAction,
+  validateDeployUnitAction,
+  applyDeployUnitAction,
+  haveAllPlayersLanded,
+  hasPlayerDeployedAllUnits,
+  haveAllPlayersDeployed,
+  getUndeployedUnits,
+  getAstronefHexes,
 } from '../state';
 import {
   TerrainType,
@@ -21,6 +36,7 @@ import {
   GamePhase,
   PlayerColor,
   GAME_CONSTANTS,
+  UNIT_PROPERTIES,
   type Unit,
   type HexCoord,
   type GameState,
@@ -33,6 +49,8 @@ import {
   type FireAction,
   type CaptureAction,
   type EndTurnAction,
+  type LandAstronefAction,
+  type DeployUnitAction,
 } from '../types';
 
 // Helper to create minimal unit for testing
@@ -56,14 +74,14 @@ function createUnit(
 }
 
 // Helper to create minimal player
-function createPlayer(id: string, color: PlayerColor): Player {
+function createPlayer(id: string, color: PlayerColor, astronefPosition: HexCoord[] = [{ q: 0, r: 0 }]): Player {
   return {
     id,
     name: `Player ${id}`,
     color,
     isConnected: true,
     isReady: true,
-    astronefPosition: [{ q: 0, r: 0 }],
+    astronefPosition,
     hasLiftedOff: false,
     capturedAstronefs: [],
   };
@@ -275,7 +293,7 @@ describe('State Management', () => {
       expect(newState.turn).toBe(5); // Same turn, different player
     });
 
-    it('should increment turn when last player finishes', () => {
+    it('should increment turn and rotate order when last player finishes', () => {
       const state = createGameState({
         currentPlayer: 'p2',
         turnOrder: ['p1', 'p2'],
@@ -284,20 +302,24 @@ describe('State Management', () => {
 
       const newState = advanceTurn(state);
 
-      expect(newState.currentPlayer).toBe('p1');
+      // Turn order rotates: p1 was first, now goes last; p2 becomes first
+      expect(newState.currentPlayer).toBe('p2');
+      expect(newState.turnOrder).toEqual(['p2', 'p1']);
       expect(newState.turn).toBe(6);
     });
 
-    it('should reset shots for combat units on new turn', () => {
-      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { shotsRemaining: 0 });
+    it('should reset shots for next players combat units on turn advance', () => {
+      // Tank owned by p2 (who will play next)
+      const tank = createUnit('tank-1', UnitType.Tank, 'p2', { q: 0, r: 0 }, { shotsRemaining: 0 });
       const state = createGameState({
         units: [tank],
-        currentPlayer: 'p2',
+        currentPlayer: 'p1',
         turnOrder: ['p1', 'p2'],
       });
 
       const newState = advanceTurn(state);
 
+      // P2's tank should have shots reset since it's now p2's turn
       const updatedTank = newState.units.find((u) => u.id === 'tank-1');
       expect(updatedTank?.shotsRemaining).toBe(GAME_CONSTANTS.SHOTS_PER_UNIT_PER_TURN);
     });
@@ -344,6 +366,149 @@ describe('State Management', () => {
       // Tide should have been drawn
       expect(newState.tideDeck.length).toBe(1);
       expect(newState.tideDiscard.length).toBe(1);
+    });
+
+    it('should rotate turn order on new round', () => {
+      const state = createGameState({
+        currentPlayer: 'p3', // Last player in turn order
+        turnOrder: ['p1', 'p2', 'p3'],
+        turn: 5,
+      });
+
+      const newState = advanceTurn(state);
+
+      // New round: turn order should rotate, p1 goes last
+      expect(newState.turn).toBe(6);
+      expect(newState.turnOrder).toEqual(['p2', 'p3', 'p1']);
+      expect(newState.currentPlayer).toBe('p2');
+    });
+
+    it('should only reset shots for next player units', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { shotsRemaining: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p2', { q: 1, r: 0 }, { shotsRemaining: 0 });
+      const state = createGameState({
+        units: [tank1, tank2],
+        currentPlayer: 'p1',
+        turnOrder: ['p1', 'p2'],
+      });
+
+      const newState = advanceTurn(state);
+
+      // Only p2's tank should have shots reset (it's now p2's turn)
+      const updatedTank1 = newState.units.find((u) => u.id === 'tank-1');
+      const updatedTank2 = newState.units.find((u) => u.id === 'tank-2');
+      expect(updatedTank1?.shotsRemaining).toBe(0); // p1's tank unchanged
+      expect(updatedTank2?.shotsRemaining).toBe(GAME_CONSTANTS.SHOTS_PER_UNIT_PER_TURN); // p2's tank reset
+    });
+  });
+
+  describe('rotateTurnOrder', () => {
+    it('should move first player to end', () => {
+      expect(rotateTurnOrder(['p1', 'p2', 'p3'])).toEqual(['p2', 'p3', 'p1']);
+    });
+
+    it('should handle two players', () => {
+      expect(rotateTurnOrder(['p1', 'p2'])).toEqual(['p2', 'p1']);
+    });
+
+    it('should return same array for single player', () => {
+      expect(rotateTurnOrder(['p1'])).toEqual(['p1']);
+    });
+
+    it('should return empty array for empty input', () => {
+      expect(rotateTurnOrder([])).toEqual([]);
+    });
+  });
+
+  describe('isPlayersTurn', () => {
+    it('should return true when it is the players turn', () => {
+      const state = createGameState({ currentPlayer: 'p1' });
+      expect(isPlayersTurn(state, 'p1')).toBe(true);
+    });
+
+    it('should return false when it is not the players turn', () => {
+      const state = createGameState({ currentPlayer: 'p2' });
+      expect(isPlayersTurn(state, 'p1')).toBe(false);
+    });
+  });
+
+  describe('isTurnTimerExpired', () => {
+    it('should return false when timer has not expired', () => {
+      const state = createGameState({
+        turnStartTime: Date.now(),
+        turnTimeLimit: 180000,
+      });
+      expect(isTurnTimerExpired(state)).toBe(false);
+    });
+
+    it('should return true when timer has expired', () => {
+      const state = createGameState({
+        turnStartTime: Date.now() - 200000, // 200 seconds ago
+        turnTimeLimit: 180000, // 180 second limit
+      });
+      expect(isTurnTimerExpired(state)).toBe(true);
+    });
+  });
+
+  describe('getRemainingTurnTime', () => {
+    it('should return remaining time in milliseconds', () => {
+      const now = Date.now();
+      const state = createGameState({
+        turnStartTime: now - 60000, // Started 60 seconds ago
+        turnTimeLimit: 180000, // 3 minute limit
+      });
+      const remaining = getRemainingTurnTime(state);
+      // Should be approximately 120000ms (120 seconds remaining)
+      expect(remaining).toBeGreaterThan(119000);
+      expect(remaining).toBeLessThanOrEqual(120000);
+    });
+
+    it('should return 0 when timer has expired', () => {
+      const state = createGameState({
+        turnStartTime: Date.now() - 200000,
+        turnTimeLimit: 180000,
+      });
+      expect(getRemainingTurnTime(state)).toBe(0);
+    });
+  });
+
+  describe('calculateInitialTurnOrder', () => {
+    it('should sort players by astronef position - furthest from cliffs first', () => {
+      const players: Player[] = [
+        createPlayer('p1', PlayerColor.Red, [{ q: 10, r: 5 }]),
+        createPlayer('p2', PlayerColor.Blue, [{ q: 30, r: 5 }]),
+        createPlayer('p3', PlayerColor.Green, [{ q: 20, r: 5 }]),
+      ];
+
+      const order = calculateInitialTurnOrder(players);
+
+      // p2 is furthest from left (q=30), then p3 (q=20), then p1 (q=10)
+      expect(order).toEqual(['p2', 'p3', 'p1']);
+    });
+
+    it('should handle single player', () => {
+      const players: Player[] = [createPlayer('p1', PlayerColor.Red, [{ q: 10, r: 5 }])];
+
+      expect(calculateInitialTurnOrder(players)).toEqual(['p1']);
+    });
+  });
+
+  describe('handleTurnTimeout', () => {
+    it('should advance turn with no AP saved', () => {
+      const state = createGameState({
+        currentPlayer: 'p1',
+        turnOrder: ['p1', 'p2'],
+        actionPoints: 10,
+        savedActionPoints: { p1: 0, p2: 0 },
+        turn: 5,
+      });
+
+      const newState = handleTurnTimeout(state);
+
+      // Should advance to next player
+      expect(newState.currentPlayer).toBe('p2');
+      // Original player should not have saved any AP (timeout = no saving)
+      expect(newState.savedActionPoints['p1']).toBe(0);
     });
   });
 
@@ -1050,6 +1215,286 @@ describe('applyBuildAction', () => {
   });
 });
 
+// Import new tide-related functions
+import {
+  predictNextTide,
+  canPlayerPredictTide,
+  getTideProbabilities,
+  updateUnitsStuckStatus,
+  getStuckUnits,
+  isUnitStuckAtPosition,
+  seededRandom,
+} from '../state';
+
+describe('Tide Prediction', () => {
+  describe('predictNextTide', () => {
+    it('should return the top card of the tide deck', () => {
+      const state = createGameState({
+        tideDeck: [TideLevel.High, TideLevel.Low, TideLevel.Normal],
+      });
+
+      expect(predictNextTide(state)).toBe(TideLevel.High);
+    });
+
+    it('should return undefined when deck is empty', () => {
+      const state = createGameState({
+        tideDeck: [],
+        tideDiscard: [TideLevel.Low, TideLevel.Normal],
+      });
+
+      expect(predictNextTide(state)).toBeUndefined();
+    });
+  });
+
+  describe('canPlayerPredictTide', () => {
+    it('should return true if player owns a Converter', () => {
+      const converter = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const state = createGameState({ units: [converter] });
+
+      expect(canPlayerPredictTide(state, 'p1')).toBe(true);
+    });
+
+    it('should return false if player does not own a Converter', () => {
+      const converter = createUnit('converter-1', UnitType.Converter, 'p2', { q: 0, r: 0 });
+      const state = createGameState({ units: [converter] });
+
+      expect(canPlayerPredictTide(state, 'p1')).toBe(false);
+    });
+
+    it('should return false if Converter is in cargo', () => {
+      const converter = createUnit('converter-1', UnitType.Converter, 'p1', { q: -9999, r: -9999 });
+      const state = createGameState({ units: [converter] });
+
+      expect(canPlayerPredictTide(state, 'p1')).toBe(false);
+    });
+  });
+
+  describe('getTideProbabilities', () => {
+    it('should calculate probabilities from deck', () => {
+      const state = createGameState({
+        tideDeck: [TideLevel.Low, TideLevel.Low, TideLevel.High, TideLevel.Normal],
+      });
+
+      const probs = getTideProbabilities(state);
+      expect(probs[TideLevel.Low]).toBeCloseTo(0.5, 5);
+      expect(probs[TideLevel.High]).toBeCloseTo(0.25, 5);
+      expect(probs[TideLevel.Normal]).toBeCloseTo(0.25, 5);
+    });
+
+    it('should calculate from discard when deck is empty', () => {
+      const state = createGameState({
+        tideDeck: [],
+        tideDiscard: [TideLevel.Low, TideLevel.Normal, TideLevel.Normal],
+      });
+
+      const probs = getTideProbabilities(state);
+      expect(probs[TideLevel.Low]).toBeCloseTo(1/3, 5);
+      expect(probs[TideLevel.Normal]).toBeCloseTo(2/3, 5);
+      expect(probs[TideLevel.High]).toBeCloseTo(0, 5);
+    });
+  });
+});
+
+describe('Stuck Unit Mechanics', () => {
+  describe('updateUnitsStuckStatus', () => {
+    it('should mark land unit stuck when on marsh at high tide', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+      ];
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { isStuck: false });
+      const state = createGameState({
+        terrain,
+        units: [tank],
+        currentTide: TideLevel.High,
+      });
+
+      const newState = updateUnitsStuckStatus(state);
+      const updatedTank = newState.units.find((u) => u.id === 'tank-1');
+      expect(updatedTank?.isStuck).toBe(true);
+    });
+
+    it('should mark land unit not stuck on marsh at normal tide', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+      ];
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { isStuck: true });
+      const state = createGameState({
+        terrain,
+        units: [tank],
+        currentTide: TideLevel.Normal,
+      });
+
+      const newState = updateUnitsStuckStatus(state);
+      const updatedTank = newState.units.find((u) => u.id === 'tank-1');
+      expect(updatedTank?.isStuck).toBe(false);
+    });
+
+    it('should mark sea unit grounded on reef at low tide', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Reef },
+      ];
+      const boat = createUnit('boat-1', UnitType.MotorBoat, 'p1', { q: 0, r: 0 }, { isStuck: false });
+      const state = createGameState({
+        terrain,
+        units: [boat],
+        currentTide: TideLevel.Low,
+      });
+
+      const newState = updateUnitsStuckStatus(state);
+      const updatedBoat = newState.units.find((u) => u.id === 'boat-1');
+      expect(updatedBoat?.isStuck).toBe(true);
+    });
+
+    it('should skip units in cargo', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+      ];
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: -9999, r: -9999 }, { isStuck: false });
+      const state = createGameState({
+        terrain,
+        units: [tank],
+        currentTide: TideLevel.High,
+      });
+
+      const newState = updateUnitsStuckStatus(state);
+      const updatedTank = newState.units.find((u) => u.id === 'tank-1');
+      expect(updatedTank?.isStuck).toBe(false);
+    });
+  });
+
+  describe('getStuckUnits', () => {
+    it('should return all stuck units', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { isStuck: true });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 1, r: 0 }, { isStuck: false });
+      const boat = createUnit('boat-1', UnitType.MotorBoat, 'p1', { q: 2, r: 0 }, { isStuck: true });
+      const state = createGameState({ units: [tank1, tank2, boat] });
+
+      const stuckUnits = getStuckUnits(state);
+      expect(stuckUnits).toHaveLength(2);
+      expect(stuckUnits.map((u) => u.id)).toContain('tank-1');
+      expect(stuckUnits.map((u) => u.id)).toContain('boat-1');
+    });
+  });
+
+  describe('isUnitStuckAtPosition', () => {
+    it('should return true for stuck tank on flooded marsh', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+      ];
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const state = createGameState({
+        terrain,
+        units: [tank],
+        currentTide: TideLevel.High,
+      });
+
+      expect(isUnitStuckAtPosition(state, 'tank-1')).toBe(true);
+    });
+
+    it('should return false for tank on land', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+      ];
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const state = createGameState({
+        terrain,
+        units: [tank],
+        currentTide: TideLevel.High,
+      });
+
+      expect(isUnitStuckAtPosition(state, 'tank-1')).toBe(false);
+    });
+
+    it('should return false for unit in cargo', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: -9999, r: -9999 });
+      const state = createGameState({ units: [tank] });
+
+      expect(isUnitStuckAtPosition(state, 'tank-1')).toBe(false);
+    });
+  });
+
+  describe('advanceTurn with stuck status update', () => {
+    it('should update stuck status when tide changes on new round', () => {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+      ];
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { isStuck: false });
+      const state = createGameState({
+        terrain,
+        units: [tank],
+        currentPlayer: 'p2',
+        turnOrder: ['p1', 'p2'],
+        turn: 5,
+        tideDeck: [TideLevel.High], // Will draw High tide
+        tideDiscard: [TideLevel.Low, TideLevel.Normal],
+      });
+
+      const newState = advanceTurn(state);
+
+      // Turn should advance
+      expect(newState.turn).toBe(6);
+      // Tide should be High
+      expect(newState.currentTide).toBe(TideLevel.High);
+      // Tank on marsh should now be stuck
+      const updatedTank = newState.units.find((u) => u.id === 'tank-1');
+      expect(updatedTank?.isStuck).toBe(true);
+    });
+  });
+});
+
+describe('Seeded Random', () => {
+  describe('seededRandom', () => {
+    it('should produce consistent results with same seed', () => {
+      const random1 = seededRandom(42);
+      const random2 = seededRandom(42);
+
+      const values1 = [random1(), random1(), random1()];
+      const values2 = [random2(), random2(), random2()];
+
+      expect(values1).toEqual(values2);
+    });
+
+    it('should produce different results with different seeds', () => {
+      const random1 = seededRandom(42);
+      const random2 = seededRandom(43);
+
+      const value1 = random1();
+      const value2 = random2();
+
+      expect(value1).not.toBe(value2);
+    });
+
+    it('should produce values between 0 and 1', () => {
+      const random = seededRandom(12345);
+
+      for (let i = 0; i < 100; i++) {
+        const value = random();
+        expect(value).toBeGreaterThanOrEqual(0);
+        expect(value).toBeLessThan(1);
+      }
+    });
+  });
+
+  describe('shuffleArray with seed', () => {
+    it('should produce consistent results with same seed', () => {
+      const array = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+      const shuffled1 = shuffleArray([...array], 42);
+      const shuffled2 = shuffleArray([...array], 42);
+
+      expect(shuffled1).toEqual(shuffled2);
+    });
+
+    it('should produce different results with different seeds', () => {
+      const array = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+      const shuffled1 = shuffleArray([...array], 42);
+      const shuffled2 = shuffleArray([...array], 43);
+
+      // Very unlikely to be the same
+      expect(shuffled1).not.toEqual(shuffled2);
+    });
+  });
+});
+
 describe('Astronef and Tower Creation', () => {
   describe('createAstronef', () => {
     it('should create astronef with 3 turrets', () => {
@@ -1109,6 +1554,437 @@ describe('Astronef and Tower Creation', () => {
       const towers = createTowers('p1');
 
       expect(towers.every((t) => t.shotsRemaining === GAME_CONSTANTS.SHOTS_PER_UNIT_PER_TURN)).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // Setup Phase Tests
+  // ============================================================================
+
+  describe('getAstronefHexes', () => {
+    it('should return 4 hex positions for astronef footprint', () => {
+      const hexes = getAstronefHexes({ q: 5, r: 5 });
+      expect(hexes).toHaveLength(4);
+    });
+
+    it('should include the center hex', () => {
+      const center = { q: 5, r: 5 };
+      const hexes = getAstronefHexes(center);
+      expect(hexes).toContainEqual(center);
+    });
+  });
+
+  describe('validateLandAstronefAction', () => {
+    function createLandingState(): GameState {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 5, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 6, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 5, r: 6 }, type: TerrainType.Land },
+        { coord: { q: 6, r: 4 }, type: TerrainType.Land },
+        { coord: { q: 7, r: 5 }, type: TerrainType.Sea },
+      ];
+      return {
+        ...createGameState(),
+        phase: GamePhase.Landing,
+        turn: 1,
+        terrain,
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 0, r: 0 }),
+          createUnit('astronef-p2', UnitType.Astronef, 'p2', { q: 0, r: 0 }),
+        ],
+      };
+    }
+
+    it('should reject landing outside of Landing phase', () => {
+      const state = { ...createLandingState(), phase: GamePhase.Playing };
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+          { q: 5, r: 6 },
+          { q: 6, r: 4 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Landing phase');
+    });
+
+    it('should reject landing if not player turn', () => {
+      const state = { ...createLandingState(), currentPlayer: 'p2' };
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+          { q: 5, r: 6 },
+          { q: 6, r: 4 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Not your turn');
+    });
+
+    it('should reject landing with wrong number of positions', () => {
+      const state = createLandingState();
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('exactly 4');
+    });
+
+    it('should reject landing on sea terrain', () => {
+      const state = createLandingState();
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+          { q: 5, r: 6 },
+          { q: 7, r: 5 }, // Sea terrain
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Cannot land on');
+    });
+
+    it('should accept valid landing position', () => {
+      const state = createLandingState();
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+          { q: 5, r: 6 },
+          { q: 6, r: 4 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe('applyLandAstronefAction', () => {
+    function createLandingState(): GameState {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 5, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 6, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 5, r: 6 }, type: TerrainType.Land },
+        { coord: { q: 6, r: 4 }, type: TerrainType.Land },
+      ];
+      return {
+        ...createGameState(),
+        phase: GamePhase.Landing,
+        turn: 1,
+        terrain,
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 0, r: 0 }),
+          createUnit('tower-p1-0', UnitType.Tower, 'p1', { q: 0, r: 0 }),
+          createUnit('tower-p1-1', UnitType.Tower, 'p1', { q: 0, r: 0 }),
+          createUnit('tower-p1-2', UnitType.Tower, 'p1', { q: 0, r: 0 }),
+        ],
+      };
+    }
+
+    it('should update astronef position', () => {
+      const state = createLandingState();
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+          { q: 5, r: 6 },
+          { q: 6, r: 4 },
+        ],
+      };
+
+      const newState = applyLandAstronefAction(state, action);
+      const astronef = newState.units.find((u) => u.id === 'astronef-p1');
+
+      expect(astronef?.position).toEqual({ q: 5, r: 5 });
+    });
+
+    it('should update player astronef position array', () => {
+      const state = createLandingState();
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 5, r: 5 },
+          { q: 6, r: 5 },
+          { q: 5, r: 6 },
+          { q: 6, r: 4 },
+        ],
+      };
+
+      const newState = applyLandAstronefAction(state, action);
+      const player = newState.players.find((p) => p.id === 'p1');
+
+      expect(player?.astronefPosition).toEqual(action.position);
+    });
+  });
+
+  describe('validateDeployUnitAction', () => {
+    function createDeploymentState(): GameState {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 5, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 6, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 5, r: 6 }, type: TerrainType.Land },
+        { coord: { q: 4, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 7, r: 5 }, type: TerrainType.Sea },
+        { coord: { q: 8, r: 5 }, type: TerrainType.Sea },
+      ];
+      return {
+        ...createGameState({
+          phase: GamePhase.Deployment,
+          turn: 2,
+        }),
+        terrain,
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 5, r: 5 }),
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 0, r: 0 }),
+          createUnit('motorboat-p1-0', UnitType.MotorBoat, 'p1', { q: 0, r: 0 }),
+        ],
+        players: [
+          {
+            ...createPlayer('p1', PlayerColor.Red),
+            astronefPosition: [{ q: 5, r: 5 }, { q: 6, r: 5 }, { q: 5, r: 6 }, { q: 4, r: 5 }],
+          },
+          createPlayer('p2', PlayerColor.Blue),
+        ],
+      };
+    }
+
+    it('should reject deployment outside of Deployment phase', () => {
+      const state = { ...createDeploymentState(), phase: GamePhase.Playing };
+      const action: DeployUnitAction = {
+        type: 'DEPLOY_UNIT',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        unitId: 'tank-p1-0',
+        position: { q: 6, r: 5 },
+      };
+
+      const result = validateDeployUnitAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Deployment phase');
+    });
+
+    it('should reject deployment of non-existent unit', () => {
+      const state = createDeploymentState();
+      const action: DeployUnitAction = {
+        type: 'DEPLOY_UNIT',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        unitId: 'nonexistent',
+        position: { q: 6, r: 5 },
+      };
+
+      const result = validateDeployUnitAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+
+    it('should reject deployment of already deployed unit', () => {
+      const state = createDeploymentState();
+      // Move the tank to a deployed position
+      state.units = state.units.map((u) =>
+        u.id === 'tank-p1-0' ? { ...u, position: { q: 6, r: 5 } } : u
+      );
+
+      const action: DeployUnitAction = {
+        type: 'DEPLOY_UNIT',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        unitId: 'tank-p1-0',
+        position: { q: 4, r: 5 },
+      };
+
+      const result = validateDeployUnitAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('already deployed');
+    });
+
+    it('should reject land unit deployment on sea terrain', () => {
+      const state = createDeploymentState();
+      const action: DeployUnitAction = {
+        type: 'DEPLOY_UNIT',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        unitId: 'tank-p1-0',
+        position: { q: 7, r: 5 },
+      };
+
+      const result = validateDeployUnitAction(state, action);
+      expect(result.valid).toBe(false);
+      // May not be adjacent to astronef OR may fail on terrain check
+      expect(result.valid).toBe(false);
+    });
+
+    it('should accept valid deployment position', () => {
+      const state = createDeploymentState();
+      const action: DeployUnitAction = {
+        type: 'DEPLOY_UNIT',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        unitId: 'tank-p1-0',
+        position: { q: 6, r: 5 },
+      };
+
+      const result = validateDeployUnitAction(state, action);
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe('applyDeployUnitAction', () => {
+    function createDeploymentState(): GameState {
+      const terrain: HexTerrain[] = [
+        { coord: { q: 5, r: 5 }, type: TerrainType.Land },
+        { coord: { q: 6, r: 5 }, type: TerrainType.Land },
+      ];
+      return {
+        ...createGameState({
+          phase: GamePhase.Deployment,
+          turn: 2,
+        }),
+        terrain,
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 5, r: 5 }),
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 0, r: 0 }),
+        ],
+        players: [
+          {
+            ...createPlayer('p1', PlayerColor.Red),
+            astronefPosition: [{ q: 5, r: 5 }, { q: 6, r: 5 }],
+          },
+          createPlayer('p2', PlayerColor.Blue),
+        ],
+      };
+    }
+
+    it('should update unit position', () => {
+      const state = createDeploymentState();
+      const action: DeployUnitAction = {
+        type: 'DEPLOY_UNIT',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        unitId: 'tank-p1-0',
+        position: { q: 6, r: 5 },
+      };
+
+      const newState = applyDeployUnitAction(state, action);
+      const tank = newState.units.find((u) => u.id === 'tank-p1-0');
+
+      expect(tank?.position).toEqual({ q: 6, r: 5 });
+    });
+  });
+
+  describe('haveAllPlayersLanded', () => {
+    it('should return false when astronef is at origin', () => {
+      const state = createGameState({
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 0, r: 0 }),
+          createUnit('astronef-p2', UnitType.Astronef, 'p2', { q: 5, r: 5 }),
+        ],
+      });
+
+      expect(haveAllPlayersLanded(state)).toBe(false);
+    });
+
+    it('should return true when all astronefs have non-origin positions', () => {
+      const state = createGameState({
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 3, r: 3 }),
+          createUnit('astronef-p2', UnitType.Astronef, 'p2', { q: 5, r: 5 }),
+        ],
+      });
+
+      expect(haveAllPlayersLanded(state)).toBe(true);
+    });
+  });
+
+  describe('hasPlayerDeployedAllUnits', () => {
+    it('should return false when units are at origin', () => {
+      const state = createGameState({
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 5, r: 5 }),
+          createUnit('tower-p1-0', UnitType.Tower, 'p1', { q: 6, r: 5 }),
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 0, r: 0 }),
+        ],
+      });
+
+      expect(hasPlayerDeployedAllUnits(state, 'p1')).toBe(false);
+    });
+
+    it('should return true when all units are deployed', () => {
+      const state = createGameState({
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 5, r: 5 }),
+          createUnit('tower-p1-0', UnitType.Tower, 'p1', { q: 6, r: 5 }),
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 4, r: 5 }),
+        ],
+      });
+
+      expect(hasPlayerDeployedAllUnits(state, 'p1')).toBe(true);
+    });
+  });
+
+  describe('getUndeployedUnits', () => {
+    it('should return units at origin excluding astronef and towers', () => {
+      const state = createGameState({
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 0, r: 0 }),
+          createUnit('tower-p1-0', UnitType.Tower, 'p1', { q: 0, r: 0 }),
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 0, r: 0 }),
+          createUnit('barge-p1-0', UnitType.Barge, 'p1', { q: 5, r: 5 }),
+        ],
+      });
+
+      const undeployed = getUndeployedUnits(state, 'p1');
+
+      expect(undeployed).toHaveLength(1);
+      expect(undeployed[0]?.id).toBe('tank-p1-0');
+    });
+
+    it('should return empty array when all units deployed', () => {
+      const state = createGameState({
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 5, r: 5 }),
+          createUnit('tower-p1-0', UnitType.Tower, 'p1', { q: 6, r: 5 }),
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 4, r: 5 }),
+        ],
+      });
+
+      const undeployed = getUndeployedUnits(state, 'p1');
+
+      expect(undeployed).toHaveLength(0);
     });
   });
 });
