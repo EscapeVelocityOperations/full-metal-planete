@@ -7,7 +7,7 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { DeploymentInventory } from './ui/deployment-inventory';
 import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANTS, type GameState, type HexCoord, type Unit, type Player } from '@/shared/game/types';
-import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, hexKey } from '@/shared/game/hex';
+import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, isTurretPlacementValid, hexKey } from '@/shared/game/hex';
 import { generateDemoMap, generateMinerals } from '@/shared/game/map-generator';
 import {
   isCombatUnit,
@@ -1328,6 +1328,14 @@ export class LabMode {
     )) {
       console.log('Invalid placement - overlap with units or incompatible terrain');
       return;
+    }
+
+    // Special validation for turrets - must be placed on astronef pode hexes
+    if (this.selectedUnit.type === UnitType.Tower) {
+      if (!isTurretPlacementValid(coord, this.selectedUnit.owner, this.gameState.units)) {
+        console.log('Invalid turret placement - must be on astronef pode hex');
+        return;
+      }
     }
 
     // Place the unit

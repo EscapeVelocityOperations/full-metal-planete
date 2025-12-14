@@ -415,6 +415,54 @@ export function isPlacementValidWithTerrain(
 }
 
 /**
+ * Get the astronef pode (turret) hexes for a given astronef position and rotation.
+ *
+ * @param astronefPosition - The anchor position of the astronef
+ * @param astronefRotation - The rotation of the astronef
+ * @returns Array of hex coordinates for the 3 pode positions
+ */
+export function getAstronefPodeHexes(
+  astronefPosition: HexCoord,
+  astronefRotation: number
+): HexCoord[] {
+  const footprint = getUnitFootprint(UnitType.Astronef, astronefPosition, astronefRotation);
+  // Pode positions are at indices 1, 2, 3 (index 0 is the center body)
+  return footprint.slice(1);
+}
+
+/**
+ * Check if a turret (Tower) can be placed at the given position.
+ * Turrets must be placed on an astronef's pode hexes.
+ *
+ * @param position - The position to place the turret
+ * @param ownerId - The owner ID of the turret being placed
+ * @param units - All game units to find matching astronef
+ * @returns True if the turret can be placed at this position
+ */
+export function isTurretPlacementValid(
+  position: HexCoord,
+  ownerId: string,
+  units: Array<{ type: UnitType; position: HexCoord | null; rotation?: number; owner: string }>
+): boolean {
+  // Find the player's astronef
+  const astronef = units.find(
+    (u) => u.type === UnitType.Astronef && u.owner === ownerId && u.position !== null
+  );
+
+  if (!astronef || !astronef.position) {
+    // No astronef placed yet - turrets cannot be placed
+    return false;
+  }
+
+  // Get the pode hexes
+  const podeHexes = getAstronefPodeHexes(astronef.position, astronef.rotation || 0);
+  const posKey = hexKey(position);
+
+  // Check if the target position is one of the pode hexes
+  return podeHexes.some((podeHex) => hexKey(podeHex) === posKey);
+}
+
+/**
  * Get all hexes occupied by all placed units.
  *
  * @param units - Array of units with position and rotation
