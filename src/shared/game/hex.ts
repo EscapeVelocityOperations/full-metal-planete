@@ -5,8 +5,9 @@
  * neighbor finding, and range utilities for flat-top hexagonal grids.
  */
 
-import type { HexCoord, CubeCoord, UnitType } from './types';
-import { UNIT_SHAPES } from './types';
+import type { HexCoord, CubeCoord, UnitType, TerrainType, TideLevel } from './types';
+import { UNIT_SHAPES, UNIT_PROPERTIES } from './types';
+import { canUnitEnterTerrain, canAstronefLandOn } from './terrain';
 
 // ============================================================================
 // Flat-Top Hex Directions
@@ -341,6 +342,71 @@ export function isPlacementValid(
   for (const hex of footprint) {
     const key = hexKey(hex);
     if (occupiedHexes.has(key)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Check if a unit placement is valid including terrain validation.
+ *
+ * Validates:
+ * - No overlapping hexes with existing units
+ * - Unit domain matches terrain (land units on land, sea units on sea)
+ * - Astronef only on plain/marsh
+ *
+ * @param unitType - Type of unit being placed
+ * @param anchor - The anchor/position hex for the unit
+ * @param rotation - Rotation steps (0-5)
+ * @param occupiedHexes - Set of hex keys that are already occupied
+ * @param getTerrainAt - Function to get terrain type at a hex
+ * @param tide - Current tide level
+ * @returns True if placement is valid
+ */
+export function isPlacementValidWithTerrain(
+  unitType: UnitType,
+  anchor: HexCoord,
+  rotation: number,
+  occupiedHexes: Set<string>,
+  getTerrainAt: (coord: HexCoord) => TerrainType,
+  tide: TideLevel
+): boolean {
+  const footprint = getUnitFootprint(unitType, anchor, rotation);
+  const props = UNIT_PROPERTIES[unitType];
+
+  for (const hex of footprint) {
+    const key = hexKey(hex);
+
+    // Check overlap with other units
+    if (occupiedHexes.has(key)) {
+      return false;
+    }
+
+    const terrain = getTerrainAt(hex);
+
+    // Astronef has special landing rules
+    if (unitType === 'astronef') {
+      if (!canAstronefLandOn(terrain)) {
+        return false;
+      }
+      continue;
+    }
+
+    // Fixed units (turret, bridge) and inert units (mineral) don't have domain movement
+    if (props.domain === 'fixed' || props.domain === 'none') {
+      // Turrets can only be placed on astronef hexes (handled separately)
+      // Bridges can be placed on sea
+      if (unitType === 'bridge') {
+        // Bridge must be on sea terrain
+        continue;
+      }
+      continue;
+    }
+
+    // Check terrain compatibility for mobile units
+    if (!canUnitEnterTerrain(unitType, terrain, tide)) {
       return false;
     }
   }

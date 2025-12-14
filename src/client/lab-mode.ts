@@ -7,8 +7,8 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { DeploymentInventory } from './ui/deployment-inventory';
 import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANTS, type GameState, type HexCoord, type Unit, type Player } from '@/shared/game/types';
-import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValid, hexKey } from '@/shared/game/hex';
-import { generateDemoMap } from '@/shared/game/map-generator';
+import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, hexKey } from '@/shared/game/hex';
+import { generateDemoMap, generateMinerals } from '@/shared/game/map-generator';
 import {
   isCombatUnit,
   canUnitFire,
@@ -220,6 +220,11 @@ export class LabMode {
     const demoTerrain = generateDemoMap();
     this.gameState.terrain = demoTerrain;
 
+    // Generate minerals on valid terrain
+    const minerals = generateMinerals(demoTerrain);
+    this.gameState.minerals = minerals;
+    console.log('Lab mode: Generated', minerals.length, 'minerals');
+
     if (this.renderer) {
       const terrainHexes: TerrainHex[] = demoTerrain.map(hex => ({
         coord: { q: hex.coord.q, r: hex.coord.r },
@@ -227,6 +232,11 @@ export class LabMode {
       }));
       this.renderer.setTerrainData(terrainHexes);
       this.renderer.setTide(this.gameState.currentTide);
+
+      // Render minerals on the map
+      if (this.renderer.setMinerals) {
+        this.renderer.setMinerals(minerals);
+      }
     }
   }
 
@@ -1305,10 +1315,18 @@ export class LabMode {
     );
     const occupiedHexes = getOccupiedHexes(otherUnits);
 
-    // Check if placement is valid for multi-hex units
+    // Check if placement is valid for multi-hex units (overlap + terrain)
     const rotation = this.selectedUnit.rotation || 0;
-    if (!isPlacementValid(this.selectedUnit.type, coord, rotation, occupiedHexes)) {
-      console.log('Invalid placement - would overlap with existing units');
+    const terrainGetter = this.getTerrainGetter();
+    if (!isPlacementValidWithTerrain(
+      this.selectedUnit.type,
+      coord,
+      rotation,
+      occupiedHexes,
+      terrainGetter,
+      this.gameState.currentTide
+    )) {
+      console.log('Invalid placement - overlap with units or incompatible terrain');
       return;
     }
 
