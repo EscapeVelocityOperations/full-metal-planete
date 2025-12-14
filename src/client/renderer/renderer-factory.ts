@@ -14,6 +14,7 @@ import type { Unit } from '@/shared/game/types';
 export interface IHexRenderer {
   setTerrainData(terrainHexes: TerrainHex[]): void;
   setUnits?(units: Unit[]): void;
+  setPlayerColors?(playerColors: Record<string, string>): void;
   setTide(tide: TideLevel): void;
   setViewport(viewport: Partial<Viewport>): void;
   render(): void;
@@ -34,6 +35,13 @@ export interface IHexRenderer {
   // Input handling (optional - CSS renderer uses DOM events)
   onHexClick?(callback: (coord: { q: number; r: number }) => void): void;
   onHexRightClick?(callback: (coord: { q: number; r: number }) => void): void;
+
+  // Hex highlighting for combat/movement visualization
+  setHighlightedHexes?(
+    hexes: Array<{ q: number; r: number }>,
+    type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire'
+  ): void;
+  clearHighlights?(): void;
 }
 
 export type RendererType = 'auto' | 'webgpu' | 'css';

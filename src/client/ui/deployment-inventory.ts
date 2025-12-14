@@ -6,6 +6,7 @@
 import { UnitType, type Unit, type PlayerColor } from '@/shared/game/types';
 
 export interface DeploymentInventoryConfig {
+  playerId: string;
   playerColor: string;
   onUnitSelect: (unitType: UnitType, unitId: string) => void;
   onRotate: () => void;
@@ -202,9 +203,11 @@ export class DeploymentInventory {
   setUnits(units: Unit[]): void {
     // Filter to only include units owned by this player that can be deployed
     // Tower is excluded since it's auto-deployed with Astronef
+    // Astronef is excluded since it's placed during landing phase
     this.units = units.filter(u =>
-      u.owner.includes(this.config.playerColor) &&
-      u.type !== UnitType.Tower
+      u.owner === this.config.playerId &&
+      u.type !== UnitType.Tower &&
+      u.type !== UnitType.Astronef
     );
     this.render();
   }

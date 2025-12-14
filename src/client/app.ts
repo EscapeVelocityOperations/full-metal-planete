@@ -418,11 +418,29 @@ export class GameApp {
     this.gameState = gameState;
     this.hud.enterGameMode();
 
+    // Set up player colors mapping for the renderer
+    this.initializePlayerColors();
+
     // Initialize deployment inventory
     this.initializeDeploymentInventory();
 
     this.updateGameState(gameState);
     this.hud.showMessage('Game started!', 3000);
+  }
+
+  /**
+   * Initialize player color mapping for the renderer
+   * Maps player IDs (e.g., "p1-abc123") to colors (e.g., "red")
+   */
+  private initializePlayerColors(): void {
+    if (!this.renderer?.setPlayerColors) return;
+
+    const playerColors: Record<string, string> = {};
+    for (const player of this.lobbyPlayers) {
+      playerColors[player.id] = player.color;
+    }
+    console.log('Setting player colors:', playerColors);
+    this.renderer.setPlayerColors(playerColors);
   }
 
   /**
@@ -433,11 +451,13 @@ export class GameApp {
       this.deploymentInventory.destroy();
     }
 
-    // Get player color from lobby players
+    // Get player info from lobby players
     const myPlayer = this.lobbyPlayers.find(p => p.id === this.client['playerId']);
+    const playerId = this.client['playerId'];
     const playerColor = myPlayer?.color || 'red';
 
     this.deploymentInventory = new DeploymentInventory({
+      playerId,
       playerColor,
       onUnitSelect: (unitType: UnitType, unitId: string) => {
         this.selectedDeploymentUnitId = unitId;
