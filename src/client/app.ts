@@ -9,9 +9,10 @@ import { GameClient } from './game-client';
 import { HUD, type LobbyPlayer, type PhaseInfo } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType, type GamePhase } from '@/shared/game/types';
+import { UnitType, TideLevel, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType, type GamePhase } from '@/shared/game/types';
 import { hexKey, hexRotateAround } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
+import { canUnitEnterTerrain } from '@/shared/game/terrain';
 
 export interface GameConfig {
   gameId: string;
@@ -655,6 +656,16 @@ export class GameApp {
       return;
     }
 
+    // Validate terrain compatibility for the unit type
+    const terrainType = terrain as TerrainType;
+    const currentTide = this.gameState.currentTide || TideLevel.Normal;
+
+    if (!canUnitEnterTerrain(selectedUnit.type, terrainType, currentTide)) {
+      const unitTypeName = selectedUnit.type.charAt(0).toUpperCase() + selectedUnit.type.slice(1);
+      this.hud.showMessage(`${unitTypeName} cannot deploy on ${terrain} terrain`, 2000);
+      return;
+    }
+
     // Check if hex is occupied
     const existingUnit = this.getUnitAtHex(coord);
     if (existingUnit) {
@@ -814,7 +825,23 @@ export class GameApp {
   private moveSelectedUnit(destination: HexCoord): void {
     if (!this.selectedUnit || !this.gameState) return;
 
-    const path = this.calculatePath(this.selectedUnit.position, destination);
+    // Validate terrain compatibility for the unit type
+    const terrain = this.getTerrainAtHex(destination);
+    if (!terrain) {
+      this.hud.showMessage('Invalid destination', 2000);
+      return;
+    }
+
+    const terrainType = terrain as TerrainType;
+    const currentTide = this.gameState.currentTide || TideLevel.Normal;
+
+    if (!canUnitEnterTerrain(this.selectedUnit.type, terrainType, currentTide)) {
+      const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+      this.hud.showMessage(`${unitTypeName} cannot enter ${terrain} terrain`, 2000);
+      return;
+    }
+
+    const path = this.calculatePath(this.selectedUnit.position!, destination);
     const apCost = path.length - 1;
 
     if (apCost > this.gameState.actionPoints) {
