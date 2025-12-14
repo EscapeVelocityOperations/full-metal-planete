@@ -40,6 +40,7 @@ export class HUD {
   private timerInterval: number | null = null;
   private turnEndTime: number = 0;
   private isReady: boolean = false;
+  private timerExpiredCallback: (() => void) | null = null;
 
   // New elements for turn/phase display
   private currentPlayerEl: HTMLElement;
@@ -213,6 +214,9 @@ export class HUD {
 
     if (remaining === 0) {
       this.stopTimer();
+      if (this.timerExpiredCallback) {
+        this.timerExpiredCallback();
+      }
     }
   }
 
@@ -238,6 +242,13 @@ export class HUD {
    */
   onEndTurn(callback: () => void): void {
     this.endTurnBtn.addEventListener('click', callback);
+  }
+
+  /**
+   * Set timer expired callback (auto-end turn)
+   */
+  onTimerExpired(callback: () => void): void {
+    this.timerExpiredCallback = callback;
   }
 
   /**

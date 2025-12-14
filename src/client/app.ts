@@ -153,6 +153,14 @@ export class GameApp {
       this.handleEndTurn();
     });
 
+    this.hud.onTimerExpired(() => {
+      // Auto-end turn on timeout (only if it's my turn)
+      if (this.isMyTurn) {
+        this.hud.showMessage('Time expired! Turn ended automatically.', 3000);
+        this.handleEndTurn(true); // Pass timeout flag
+      }
+    });
+
     this.hud.onReady(() => {
       this.handleReady();
     });
@@ -1112,13 +1120,16 @@ export class GameApp {
   /**
    * Handle end turn button click
    */
-  private handleEndTurn(): void {
+  private handleEndTurn(isTimeout = false): void {
     if (!this.isMyTurn || !this.gameState) return;
 
-    const savedAP = Math.min(this.gameState.actionPoints, 10);
+    // On timeout, no AP is saved; otherwise save remaining AP (up to 10)
+    const savedAP = isTimeout ? 0 : Math.min(this.gameState.actionPoints, 10);
     this.client.endTurn(savedAP);
 
-    this.hud.showMessage('Turn ended', 2000);
+    if (!isTimeout) {
+      this.hud.showMessage('Turn ended', 2000);
+    }
     this.deselectUnit();
   }
 
