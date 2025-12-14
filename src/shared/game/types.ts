@@ -475,41 +475,41 @@ export const UNIT_SHAPES: Record<UnitType, UnitShape> = {
     ],
     canRotate: true,
   },
-  // Single-hex units
+  // Single-hex units (canRotate enables visual sprite rotation)
   [UnitType.Tower]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Tank]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.SuperTank]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.MotorBoat]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Crab]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Converter]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Bridge]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
 };
 
