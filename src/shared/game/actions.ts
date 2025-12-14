@@ -73,13 +73,17 @@ export function calculateSavedAP(unusedAP: number, currentSaved: number): number
 
 /**
  * Calculate the AP cost for a movement path.
- * 1 AP per hex moved.
+ * Cost depends on unit type's movementCost per hex.
  */
-export function calculateMoveCost(path: HexCoord[]): number {
+export function calculateMoveCost(path: HexCoord[], unitType: UnitType): number {
   if (path.length <= 1) {
     return 0;
   }
-  return path.length - 1; // Number of moves = path length - 1
+  const movementCost = UNIT_PROPERTIES[unitType].movementCost;
+  if (!isFinite(movementCost)) {
+    return Infinity; // Unit cannot move
+  }
+  return (path.length - 1) * movementCost;
 }
 
 // ============================================================================
@@ -187,8 +191,14 @@ export function validateMoveAction(
     return { valid: false, error: 'Path must start at unit position' };
   }
 
-  // Calculate cost
-  const cost = calculateMoveCost(path);
+  // Check unit can move (not fixed)
+  const movementCostPerHex = UNIT_PROPERTIES[unit.type].movementCost;
+  if (!isFinite(movementCostPerHex)) {
+    return { valid: false, error: `${unit.type} cannot move` };
+  }
+
+  // Calculate cost based on unit type
+  const cost = calculateMoveCost(path, unit.type);
 
   // Check sufficient AP
   if (cost > state.actionPoints) {

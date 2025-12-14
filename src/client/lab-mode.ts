@@ -6,7 +6,7 @@
 import { createRenderer, type IHexRenderer, type RendererType } from '@/client/renderer/renderer-factory';
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANTS, type GameState, type HexCoord, type Unit, type Player } from '@/shared/game/types';
+import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANTS, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type Player } from '@/shared/game/types';
 import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, isTurretPlacementValid, hexKey } from '@/shared/game/hex';
 import { generateDemoMap, generateMinerals } from '@/shared/game/map-generator';
 import {
@@ -41,19 +41,11 @@ type LabModeType = 'setup' | 'play';
 type PlaySubMode = 'move' | 'combat';
 
 /**
- * Movement cost per unit type (AP per hex)
+ * Helper to get movement cost for a unit type from UNIT_PROPERTIES.
  */
-const MOVEMENT_COSTS: Record<UnitType, number> = {
-  [UnitType.Tank]: 1,
-  [UnitType.SuperTank]: 2,
-  [UnitType.MotorBoat]: 1,
-  [UnitType.Barge]: 2,
-  [UnitType.Crab]: 2,
-  [UnitType.Converter]: 2,
-  [UnitType.Astronef]: Infinity, // Cannot move
-  [UnitType.Tower]: Infinity, // Cannot move
-  [UnitType.Bridge]: Infinity, // Cannot move
-};
+function getMovementCost(unitType: UnitType): number {
+  return UNIT_PROPERTIES[unitType].movementCost;
+}
 
 export class LabMode {
   private renderer: IHexRenderer | null = null;
@@ -1019,7 +1011,7 @@ export class LabMode {
       <div class="lab-selected-unit">
         <div class="lab-selected-unit-title">Selected Unit</div>
         <div class="lab-selected-unit-name">${this.selectedMapUnit.type}</div>
-        <div class="lab-selected-unit-rotation">Move cost: ${MOVEMENT_COSTS[this.selectedMapUnit.type]} AP/hex</div>
+        <div class="lab-selected-unit-rotation">Move cost: ${getMovementCost(this.selectedMapUnit.type)} AP/hex</div>
       </div>
       ` : ''}
 
@@ -1382,7 +1374,7 @@ export class LabMode {
       const clickedUnit = this.findUnitAtHex(coord);
       if (clickedUnit && clickedUnit.owner.includes(currentColor)) {
         // Check if unit can move
-        const moveCost = MOVEMENT_COSTS[clickedUnit.type];
+        const moveCost = getMovementCost(clickedUnit.type);
         if (moveCost === Infinity) {
           console.log('This unit cannot move');
           return;
@@ -1396,7 +1388,7 @@ export class LabMode {
     }
 
     // Unit is selected, try to move it
-    const moveCost = MOVEMENT_COSTS[this.selectedMapUnit.type];
+    const moveCost = getMovementCost(this.selectedMapUnit.type);
 
     // Check if clicking on the same unit to deselect
     const clickedUnit = this.findUnitAtHex(coord);

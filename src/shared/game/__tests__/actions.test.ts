@@ -146,18 +146,27 @@ describe('Action System', () => {
   });
 
   describe('calculateMoveCost', () => {
-    it('should return 1 AP per hex for movement', () => {
+    it('should return 1 AP per hex for Tank movement', () => {
       const path: HexCoord[] = [
         { q: 0, r: 0 },
         { q: 1, r: 0 },
         { q: 2, r: 0 },
       ];
-      expect(calculateMoveCost(path)).toBe(2); // 2 hexes moved
+      expect(calculateMoveCost(path, UnitType.Tank)).toBe(2); // 2 hexes moved at 1 AP each
+    });
+
+    it('should return 2 AP per hex for SuperTank movement', () => {
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+        { q: 2, r: 0 },
+      ];
+      expect(calculateMoveCost(path, UnitType.SuperTank)).toBe(4); // 2 hexes moved at 2 AP each
     });
 
     it('should return 0 for staying in place', () => {
       const path: HexCoord[] = [{ q: 0, r: 0 }];
-      expect(calculateMoveCost(path)).toBe(0);
+      expect(calculateMoveCost(path, UnitType.Tank)).toBe(0);
     });
 
     it('should handle longer paths', () => {
@@ -169,7 +178,29 @@ describe('Action System', () => {
         { q: 4, r: 0 },
         { q: 5, r: 0 },
       ];
-      expect(calculateMoveCost(path)).toBe(5);
+      expect(calculateMoveCost(path, UnitType.Tank)).toBe(5);
+    });
+
+    it('should return Infinity for fixed units', () => {
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+      ];
+      expect(calculateMoveCost(path, UnitType.Tower)).toBe(Infinity);
+      expect(calculateMoveCost(path, UnitType.Astronef)).toBe(Infinity);
+      expect(calculateMoveCost(path, UnitType.Bridge)).toBe(Infinity);
+    });
+
+    it('should correctly calculate cost for heavy units', () => {
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+        { q: 2, r: 0 },
+      ];
+      // Barge: 2 AP per hex
+      expect(calculateMoveCost(path, UnitType.Barge)).toBe(4);
+      // Converter: 2 AP per hex
+      expect(calculateMoveCost(path, UnitType.Converter)).toBe(4);
     });
   });
 
