@@ -70,18 +70,18 @@ export class DeploymentInventory {
     style.textContent = `
       .deployment-inventory {
         position: fixed;
-        left: 20px;
-        top: 50%;
-        transform: translateY(-50%);
-        background: rgba(20, 20, 30, 0.95);
+        left: 10px;
+        top: 80px;
+        background: rgba(20, 20, 30, 0.9);
         border: 2px solid #4a90e2;
         border-radius: 12px;
-        padding: 15px;
-        min-width: 200px;
-        max-height: 80vh;
+        padding: 12px;
+        width: 220px;
+        max-height: calc(100vh - 180px);
         overflow-y: auto;
         z-index: 100;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        pointer-events: auto;
       }
 
       .deployment-inventory.hidden {
