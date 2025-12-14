@@ -20,7 +20,7 @@ const UNIT_INFO: Record<UnitType, { name: string; symbol: string; description: s
   [UnitType.SuperTank]: { name: 'Super Tank', symbol: '\u25A0\u25A0', description: 'Heavy combat unit (2 AP/hex)' },
   [UnitType.MotorBoat]: { name: 'Motor Boat', symbol: '\u25BA', description: 'Fast water unit (1 AP/hex on water)' },
   [UnitType.Barge]: { name: 'Barge', symbol: '\u25AC', description: 'Transport unit (2 hexes, can carry units)' },
-  [UnitType.Crab]: { name: 'Crab', symbol: '\u2739', description: 'Amphibious unit (works on all terrain)' },
+  [UnitType.Crab]: { name: 'Crab', symbol: '\u2739', description: 'Land transporter (2 cargo slots, destroys enemies)' },
   [UnitType.Converter]: { name: 'Converter', symbol: '\u25CE', description: 'Mineral converter (extracts minerals)' },
   [UnitType.Bridge]: { name: 'Bridge', symbol: '\u2550', description: 'Creates land crossing over water' },
 };
