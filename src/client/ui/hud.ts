@@ -55,6 +55,11 @@ export class HUD {
   private zoomFitBtn: HTMLButtonElement;
   private zoomLevelEl: HTMLElement;
 
+  // Tide forecast
+  private tideForecastContainer: HTMLElement;
+  private tideForecast1El: HTMLElement;
+  private tideForecast2El: HTMLElement;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -80,6 +85,11 @@ export class HUD {
     this.zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
     this.zoomFitBtn = document.getElementById('zoom-fit-btn') as HTMLButtonElement;
     this.zoomLevelEl = document.getElementById('zoom-level')!;
+
+    // Tide forecast
+    this.tideForecastContainer = document.getElementById('tide-forecast-container')!;
+    this.tideForecast1El = document.getElementById('tide-forecast-1')!;
+    this.tideForecast2El = document.getElementById('tide-forecast-2')!;
   }
 
   /**
@@ -127,6 +137,44 @@ export class HUD {
         this.tideValueEl.classList.add('high');
         break;
     }
+  }
+
+  /**
+   * Update tide forecast display based on converter count.
+   * @param forecast Array of future tide levels (0-2 items based on converter count)
+   * @param converterCount Number of converters the player owns
+   */
+  updateTideForecast(forecast: TideLevel[], converterCount: number): void {
+    // Reset visibility
+    this.tideForecast1El.classList.add('hidden');
+    this.tideForecast2El.classList.add('hidden');
+    this.tideForecastContainer.classList.remove('no-converter');
+
+    if (converterCount === 0) {
+      // No converter - show blurred placeholder
+      this.tideForecastContainer.classList.add('no-converter');
+      this.tideForecast1El.textContent = '?';
+      this.tideForecast1El.className = 'tide-forecast-item unknown';
+      return;
+    }
+
+    // Show forecast based on converter count
+    if (forecast.length >= 1) {
+      this.updateForecastItem(this.tideForecast1El, forecast[0], 1);
+    }
+
+    if (forecast.length >= 2 && converterCount >= 2) {
+      this.updateForecastItem(this.tideForecast2El, forecast[1], 2);
+    }
+  }
+
+  /**
+   * Update a single forecast item element
+   */
+  private updateForecastItem(el: HTMLElement, tide: TideLevel, turnOffset: number): void {
+    el.textContent = `+${turnOffset}: ${tide.toUpperCase()}`;
+    el.classList.remove('hidden', 'low', 'normal', 'high', 'unknown');
+    el.classList.add(tide);
   }
 
   /**

@@ -124,13 +124,66 @@ export function predictNextTide(state: GameState): TideLevel | undefined {
  * Check if a player can predict the tide (owns a Converter).
  */
 export function canPlayerPredictTide(state: GameState, playerId: string): boolean {
-  return state.units.some(
-    (unit) =>
-      unit.owner === playerId &&
-      unit.type === UnitType.Converter &&
-      // Converter must not be in cargo (loaded on another unit)
-      unit.position.q !== -9999
-  );
+  return getPlayerConverterCount(state, playerId) > 0;
+}
+
+/**
+ * Count converters owned by a player that are operational (not in cargo).
+ * Each converter allows seeing one additional turn of tide forecast.
+ */
+export function getPlayerConverterCount(state: GameState, playerId: string): number {
+  return state.units.filter((unit) => {
+    if (unit.owner !== playerId || unit.type !== UnitType.Converter) {
+      return false;
+    }
+    // Converter must not be in cargo (loaded on another unit)
+    // In cargo units have position null or at special coordinate -9999
+    if (unit.position === null) {
+      return false;
+    }
+    return unit.position.q !== -9999;
+  }).length;
+}
+
+/**
+ * Get tide forecast for a player based on their converter count.
+ * - 0 converters: empty array (no visibility)
+ * - 1 converter: see 1 turn ahead
+ * - 2+ converters: see 2 turns ahead
+ * Returns array of TideLevel for future turns.
+ */
+export function getTideForecast(state: GameState, playerId: string): TideLevel[] {
+  const converterCount = getPlayerConverterCount(state, playerId);
+
+  if (converterCount === 0) {
+    return [];
+  }
+
+  const forecastLength = Math.min(converterCount, 2); // Max 2 turns ahead
+  const forecast: TideLevel[] = [];
+
+  // Simulate drawing cards to get forecast
+  let simulatedDeck = [...state.tideDeck];
+  let simulatedDiscard = [...state.tideDiscard];
+
+  for (let i = 0; i < forecastLength; i++) {
+    // Reshuffle if deck is empty
+    if (simulatedDeck.length === 0) {
+      if (simulatedDiscard.length === 0) {
+        break; // No more cards to draw
+      }
+      simulatedDeck = shuffleArray(simulatedDiscard);
+      simulatedDiscard = [];
+    }
+
+    const card = simulatedDeck.shift();
+    if (card) {
+      forecast.push(card);
+      simulatedDiscard.push(card);
+    }
+  }
+
+  return forecast;
 }
 
 /**

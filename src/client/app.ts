@@ -13,6 +13,7 @@ import { UnitType, TideLevel, type GameState, type HexCoord, type Unit, type Mov
 import { hexKey, hexRotateAround } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
+import { getTideForecast, getPlayerConverterCount } from '@/shared/game/state';
 
 export interface GameConfig {
   gameId: string;
@@ -496,10 +497,24 @@ export class GameApp {
       this.hud.updateTide(gameState.currentTide);
     }
 
+    // Update tide forecast based on converter ownership
+    if (this.gameState) {
+      const playerId = this.client['playerId'];
+      const converterCount = getPlayerConverterCount(this.gameState, playerId);
+      const forecast = getTideForecast(this.gameState, playerId);
+      this.hud.updateTideForecast(forecast, converterCount);
+    }
+
     // Update units rendering
     if (this.renderer?.setUnits && this.gameState.units) {
       console.log('Updating units in renderer:', this.gameState.units.length, 'units');
       this.renderer.setUnits(this.gameState.units);
+    }
+
+    // Update minerals rendering
+    if (this.renderer?.setMinerals && this.gameState.minerals) {
+      console.log('Updating minerals in renderer:', this.gameState.minerals.length, 'minerals');
+      this.renderer.setMinerals(this.gameState.minerals);
     }
 
     if (gameState.turn !== undefined) {

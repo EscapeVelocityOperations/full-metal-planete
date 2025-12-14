@@ -87,6 +87,58 @@
         color: #44ff44;
       }
 
+      /* Tide Forecast */
+      .tide-forecast {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .tide-forecast-item {
+        font-size: 14px;
+        font-weight: bold;
+        padding: 4px 8px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        min-width: 50px;
+        text-align: center;
+      }
+
+      .tide-forecast-item.hidden {
+        display: none;
+      }
+
+      .tide-forecast-item.low {
+        background: rgba(68, 255, 68, 0.3);
+        color: #44ff44;
+      }
+
+      .tide-forecast-item.normal {
+        background: rgba(255, 170, 0, 0.3);
+        color: #ffaa00;
+      }
+
+      .tide-forecast-item.high {
+        background: rgba(255, 68, 68, 0.3);
+        color: #ff4444;
+      }
+
+      .tide-forecast-item.unknown {
+        background: rgba(136, 136, 136, 0.3);
+        color: #888;
+      }
+
+      #tide-forecast-container.no-converter .tide-forecast-item {
+        filter: blur(4px);
+        opacity: 0.3;
+      }
+
+      .no-converter-warning {
+        font-size: 10px;
+        color: #888;
+        font-style: italic;
+      }
+
       .action-btn {
         padding: 12px 24px;
         border: none;
@@ -592,6 +644,13 @@
           <div class="hud-item">
             <div class="hud-label">Tide</div>
             <div class="hud-value" id="tide-value">NORMAL</div>
+          </div>
+          <div class="hud-item" id="tide-forecast-container">
+            <div class="hud-label">Forecast</div>
+            <div class="tide-forecast" id="tide-forecast">
+              <span class="tide-forecast-item hidden" id="tide-forecast-1">?</span>
+              <span class="tide-forecast-item hidden" id="tide-forecast-2">?</span>
+            </div>
           </div>
           <div class="hud-item">
             <div class="hud-label">Timer</div>
