@@ -569,8 +569,9 @@ export class GameApp {
         .filter(u => {
           // A unit is deployed if it's on the map and not an astronef/tower
           if (u.type === UnitType.Astronef || u.type === UnitType.Tower) return false;
-          // Check if unit has a position (deployed) or is still in astronef (not deployed)
-          return u.position !== null;
+          // Check if unit has been deployed (position not at origin 0,0)
+          // Server initializes undeployed units at {q:0, r:0}
+          return u.position !== null && (u.position.q !== 0 || u.position.r !== 0);
         })
         .map(u => u.id);
 
@@ -690,7 +691,7 @@ export class GameApp {
     selectedUnit.position = coord;
     this.deploymentInventory.setDeployedUnits([
       ...this.gameState.units
-        .filter(u => u.type !== UnitType.Astronef && u.type !== UnitType.Tower && u.position !== null)
+        .filter(u => u.type !== UnitType.Astronef && u.type !== UnitType.Tower && u.position !== null && (u.position.q !== 0 || u.position.r !== 0))
         .map(u => u.id),
       selectedUnit.id,
     ]);
