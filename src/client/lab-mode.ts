@@ -7,7 +7,7 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { DeploymentInventory } from './ui/deployment-inventory';
 import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANTS, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type Player } from '@/shared/game/types';
-import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, isTurretPlacementValid, hexKey } from '@/shared/game/hex';
+import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, isTurretPlacementValid, hexKey, findPath, getReachableHexes, hexFromKey, type PathTerrainGetter } from '@/shared/game/hex';
 import { generateDemoMap, generateMinerals } from '@/shared/game/map-generator';
 import {
   isCombatUnit,
@@ -1382,6 +1382,10 @@ export class LabMode {
 
         this.selectedMapUnit = clickedUnit;
         console.log('Selected unit for movement:', clickedUnit.type);
+
+        // Show reachable hexes
+        this.showReachableHexes(clickedUnit);
+
         this.updateControlPanel();
       }
       return;
@@ -1398,12 +1402,33 @@ export class LabMode {
       return;
     }
 
-    // Calculate distance and AP cost
+    // Get start position and validate
     const startPos = this.selectedMapUnit.position;
     if (!startPos) return;
 
-    const distance = this.hexDistance(startPos, coord);
-    const totalAPCost = distance * moveCost;
+    // Get occupied hexes (excluding the moving unit)
+    const occupiedHexes = getOccupiedHexes(
+      this.gameState.units.filter(u => u.id !== this.selectedMapUnit!.id && u.position !== null)
+    );
+
+    // Use pathfinding to find valid path
+    const terrainGetter = this.getTerrainGetter();
+    const path = findPath(
+      startPos,
+      coord,
+      this.selectedMapUnit.type,
+      terrainGetter,
+      this.gameState.currentTide,
+      occupiedHexes
+    );
+
+    if (!path || path.length <= 1) {
+      console.log('No valid path to destination');
+      return;
+    }
+
+    // Calculate AP cost based on path length
+    const totalAPCost = (path.length - 1) * moveCost;
 
     // Check if we have enough AP
     if (totalAPCost > this.gameState.actionPoints) {
@@ -1411,17 +1436,8 @@ export class LabMode {
       return;
     }
 
-    // Check if destination is occupied
-    const occupiedHexes = getOccupiedHexes(
-      this.gameState.units.filter(u => u.id !== this.selectedMapUnit!.id && u.position !== null)
-    );
-    if (occupiedHexes.has(hexKey(coord))) {
-      console.log('Destination hex is occupied');
-      return;
-    }
-
     // Move the unit
-    console.log(`Moving ${this.selectedMapUnit.type} from (${startPos.q},${startPos.r}) to (${coord.q},${coord.r}), cost: ${totalAPCost} AP`);
+    console.log(`Moving ${this.selectedMapUnit.type} from (${startPos.q},${startPos.r}) to (${coord.q},${coord.r}), cost: ${totalAPCost} AP, path length: ${path.length}`);
     this.selectedMapUnit.position = coord;
     this.gameState.actionPoints -= totalAPCost;
 
@@ -1433,6 +1449,49 @@ export class LabMode {
     this.deselectMapUnit();
     this.updateControlPanel();
     this.render();
+  }
+
+  /**
+   * Show reachable hexes for a unit based on available AP
+   */
+  private showReachableHexes(unit: Unit): void {
+    if (!unit.position) return;
+
+    // Get occupied hexes (excluding this unit)
+    const occupiedHexes = getOccupiedHexes(
+      this.gameState.units.filter(u => u.id !== unit.id && u.position !== null)
+    );
+
+    // Get terrain getter
+    const terrainGetter = this.getTerrainGetter();
+
+    // Get reachable hexes within AP budget
+    const reachable = getReachableHexes(
+      unit.position,
+      unit.type,
+      this.gameState.actionPoints,
+      terrainGetter,
+      this.gameState.currentTide,
+      occupiedHexes
+    );
+
+    // Convert to array of HexCoord for highlighting
+    const reachableHexes: HexCoord[] = [];
+    for (const key of reachable.keys()) {
+      reachableHexes.push(hexFromKey(key));
+    }
+
+    // Highlight the unit's current position as selected
+    if (this.renderer?.setHighlightedHexes) {
+      this.renderer.setHighlightedHexes([unit.position], 'selected');
+    }
+
+    // Highlight reachable hexes as range
+    if (reachableHexes.length > 0 && this.renderer?.setHighlightedHexes) {
+      this.renderer.setHighlightedHexes(reachableHexes, 'range');
+    }
+
+    console.log(`Showing ${reachableHexes.length} reachable hexes for ${unit.type}`);
   }
 
   /**

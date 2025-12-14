@@ -575,3 +575,151 @@ describe('Hex Rotation', () => {
     });
   });
 });
+
+// Import pathfinding functions for extended tests
+import { findPath, getReachableHexes, hexKey } from '../hex';
+import { TerrainType, TideLevel, UnitType } from '../types';
+
+describe('Pathfinding', () => {
+  // Simple terrain getter that returns land everywhere
+  const allLandTerrain = () => TerrainType.Land;
+  // Terrain getter with sea in the middle
+  const seaBarrier = (coord: HexCoord) => {
+    if (coord.q === 1 && coord.r >= -1 && coord.r <= 1) {
+      return TerrainType.Sea;
+    }
+    return TerrainType.Land;
+  };
+
+  describe('findPath', () => {
+    it('should return start position for same start and end', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const path = findPath(start, start, UnitType.Tank, allLandTerrain, TideLevel.Normal, new Set());
+      expect(path).toEqual([start]);
+    });
+
+    it('should find direct path on clear terrain', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const end: HexCoord = { q: 2, r: 0 };
+      const path = findPath(start, end, UnitType.Tank, allLandTerrain, TideLevel.Normal, new Set());
+      expect(path).not.toBeNull();
+      expect(path!.length).toBe(3); // start + 2 steps
+      expect(path![0]).toEqual(start);
+      expect(path![path!.length - 1]).toEqual(end);
+    });
+
+    it('should return null for fixed units', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const end: HexCoord = { q: 1, r: 0 };
+      const path = findPath(start, end, UnitType.Tower, allLandTerrain, TideLevel.Normal, new Set());
+      expect(path).toBeNull();
+    });
+
+    it('should return null when destination is occupied', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const end: HexCoord = { q: 1, r: 0 };
+      const occupied = new Set([hexKey(end)]);
+      const path = findPath(start, end, UnitType.Tank, allLandTerrain, TideLevel.Normal, occupied);
+      expect(path).toBeNull();
+    });
+
+    it('should return null when destination terrain is incompatible', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const end: HexCoord = { q: 1, r: 0 };
+      const seaTerrain = (coord: HexCoord) =>
+        coord.q === 1 ? TerrainType.Sea : TerrainType.Land;
+      const path = findPath(start, end, UnitType.Tank, seaTerrain, TideLevel.Normal, new Set());
+      expect(path).toBeNull();
+    });
+
+    it('should find path around obstacles', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const end: HexCoord = { q: 2, r: 0 };
+      // Sea barrier at q=1
+      const path = findPath(start, end, UnitType.Tank, seaBarrier, TideLevel.Normal, new Set());
+      expect(path).not.toBeNull();
+      // Path should go around the barrier
+      expect(path!.length).toBeGreaterThan(3);
+      expect(path![0]).toEqual(start);
+      expect(path![path!.length - 1]).toEqual(end);
+    });
+
+    it('should find path for sea units on water', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const end: HexCoord = { q: 2, r: 0 };
+      const allSeaTerrain = () => TerrainType.Sea;
+      const path = findPath(start, end, UnitType.MotorBoat, allSeaTerrain, TideLevel.Normal, new Set());
+      expect(path).not.toBeNull();
+      expect(path!.length).toBe(3);
+    });
+  });
+
+  describe('getReachableHexes', () => {
+    it('should return empty map for fixed units', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const reachable = getReachableHexes(start, UnitType.Tower, 15, allLandTerrain, TideLevel.Normal, new Set());
+      expect(reachable.size).toBe(0);
+    });
+
+    it('should return empty map for 0 AP', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const reachable = getReachableHexes(start, UnitType.Tank, 0, allLandTerrain, TideLevel.Normal, new Set());
+      expect(reachable.size).toBe(0);
+    });
+
+    it('should find all neighbors with 1 AP for Tank', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const reachable = getReachableHexes(start, UnitType.Tank, 1, allLandTerrain, TideLevel.Normal, new Set());
+      expect(reachable.size).toBe(6); // 6 neighbors
+      // All should cost 1 AP
+      for (const cost of reachable.values()) {
+        expect(cost).toBe(1);
+      }
+    });
+
+    it('should account for higher movement cost', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      // SuperTank costs 2 AP per hex
+      const reachable = getReachableHexes(start, UnitType.SuperTank, 2, allLandTerrain, TideLevel.Normal, new Set());
+      expect(reachable.size).toBe(6); // Can only move 1 step with 2 AP
+      for (const cost of reachable.values()) {
+        expect(cost).toBe(2);
+      }
+    });
+
+    it('should exclude occupied hexes', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const occupied = new Set([hexKey({ q: 1, r: 0 }), hexKey({ q: 0, r: 1 })]);
+      const reachable = getReachableHexes(start, UnitType.Tank, 1, allLandTerrain, TideLevel.Normal, occupied);
+      expect(reachable.size).toBe(4); // 6 - 2 occupied
+      expect(reachable.has(hexKey({ q: 1, r: 0 }))).toBe(false);
+      expect(reachable.has(hexKey({ q: 0, r: 1 }))).toBe(false);
+    });
+
+    it('should exclude impassable terrain', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      // Tank can't go on sea
+      const terrainWithSea = (coord: HexCoord) =>
+        coord.q === 1 && coord.r === 0 ? TerrainType.Sea : TerrainType.Land;
+      const reachable = getReachableHexes(start, UnitType.Tank, 1, terrainWithSea, TideLevel.Normal, new Set());
+      expect(reachable.size).toBe(5); // 6 - 1 sea hex
+      expect(reachable.has(hexKey({ q: 1, r: 0 }))).toBe(false);
+    });
+
+    it('should find hexes at multiple distances', () => {
+      const start: HexCoord = { q: 0, r: 0 };
+      const reachable = getReachableHexes(start, UnitType.Tank, 2, allLandTerrain, TideLevel.Normal, new Set());
+      // Distance 1: 6 hexes, Distance 2: 12 hexes (ring of radius 2)
+      expect(reachable.size).toBe(18);
+      // Check costs
+      let cost1Count = 0;
+      let cost2Count = 0;
+      for (const cost of reachable.values()) {
+        if (cost === 1) cost1Count++;
+        if (cost === 2) cost2Count++;
+      }
+      expect(cost1Count).toBe(6);
+      expect(cost2Count).toBe(12);
+    });
+  });
+});
