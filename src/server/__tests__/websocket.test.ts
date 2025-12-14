@@ -120,7 +120,7 @@ describe('WebSocketHandler', () => {
       expect(spy).toHaveBeenCalled();
     });
 
-    it('should handle ACTION message', () => {
+    it('should handle ACTION message', async () => {
       const player2: Player = {
         id: 'p2-abc',
         name: 'Bob',
@@ -151,6 +151,9 @@ describe('WebSocketHandler', () => {
         type: 'ACTION',
         payload: action,
       })));
+
+      // Wait for async message handler to complete
+      await new Promise(resolve => setImmediate(resolve));
 
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('ACTION'));
     });
