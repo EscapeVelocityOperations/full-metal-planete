@@ -44,6 +44,11 @@ export class GameApp {
   private deploymentInventory: DeploymentInventory | null = null;
   private selectedDeploymentUnitId: string | null = null;
 
+  // Movement preview state
+  private movementPreviewDestination: HexCoord | null = null;
+  private movementPreviewPath: HexCoord[] = [];
+  private movementPreviewAPCost: number = 0;
+
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
     this.config = config;
@@ -606,9 +611,17 @@ export class GameApp {
 
     if (this.selectedUnit) {
       if (unit && unit.owner === this.client['playerId']) {
+        // Clicked on own unit - select it instead
+        this.clearMovementPreview();
         this.selectUnit(unit);
+      } else if (this.movementPreviewDestination &&
+                 this.movementPreviewDestination.q === coord.q &&
+                 this.movementPreviewDestination.r === coord.r) {
+        // Clicked on the previewed destination - confirm movement
+        this.confirmMovement();
       } else {
-        this.moveSelectedUnit(coord);
+        // Clicked on a new hex - show movement preview
+        this.showMovementPreview(coord);
       }
     } else if (unit && unit.owner === this.client['playerId']) {
       this.selectUnit(unit);
@@ -814,13 +827,134 @@ export class GameApp {
    */
   private deselectUnit(): void {
     if (this.selectedUnit) {
+      this.clearMovementPreview();
       this.selectedUnit = null;
       this.hud.showMessage('Unit deselected', 1000);
     }
   }
 
   /**
-   * Move selected unit to destination
+   * Show movement preview for a destination hex
+   * Highlights the path and shows AP cost
+   */
+  private showMovementPreview(destination: HexCoord): void {
+    if (!this.selectedUnit || !this.gameState) return;
+
+    // Validate terrain compatibility
+    const terrain = this.getTerrainAtHex(destination);
+    if (!terrain) {
+      this.hud.showMessage('Invalid destination', 2000);
+      return;
+    }
+
+    const terrainType = terrain as TerrainType;
+    const currentTide = this.gameState.currentTide || TideLevel.Normal;
+
+    if (!canUnitEnterTerrain(this.selectedUnit.type, terrainType, currentTide)) {
+      const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+      this.hud.showMessage(`${unitTypeName} cannot enter ${terrain} terrain`, 2000);
+      return;
+    }
+
+    // Check if destination is occupied
+    const existingUnit = this.getUnitAtHex(destination);
+    if (existingUnit && existingUnit.id !== this.selectedUnit.id) {
+      this.hud.showMessage('Hex is occupied', 2000);
+      return;
+    }
+
+    // Calculate path and cost
+    const path = this.calculatePath(this.selectedUnit.position!, destination);
+    const apCost = path.length - 1;
+
+    // Store preview state
+    this.movementPreviewDestination = destination;
+    this.movementPreviewPath = path;
+    this.movementPreviewAPCost = apCost;
+
+    // Clear previous highlights and show new path
+    if (this.renderer?.clearHighlights) {
+      this.renderer.clearHighlights();
+    }
+
+    // Highlight the path hexes
+    if (this.renderer?.setHighlightedHexes) {
+      // Highlight intermediate hexes as 'range' (blue)
+      const intermediateHexes = path.slice(1, -1);
+      if (intermediateHexes.length > 0) {
+        this.renderer.setHighlightedHexes(intermediateHexes, 'range');
+      }
+
+      // Highlight destination as 'selected' (green) if we have enough AP, 'danger' (yellow) if not
+      const highlightType = apCost <= this.gameState.actionPoints ? 'selected' : 'danger';
+      this.renderer.setHighlightedHexes([destination], highlightType);
+    }
+
+    // Show AP cost message
+    if (apCost > this.gameState.actionPoints) {
+      this.hud.showMessage(`Need ${apCost} AP (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+    } else {
+      this.hud.showMessage(`Move for ${apCost} AP - Click again to confirm`, 3000);
+    }
+  }
+
+  /**
+   * Clear the movement preview
+   */
+  private clearMovementPreview(): void {
+    this.movementPreviewDestination = null;
+    this.movementPreviewPath = [];
+    this.movementPreviewAPCost = 0;
+
+    if (this.renderer?.clearHighlights) {
+      this.renderer.clearHighlights();
+    }
+  }
+
+  /**
+   * Confirm the previewed movement
+   */
+  private confirmMovement(): void {
+    if (!this.selectedUnit || !this.gameState || !this.movementPreviewDestination) return;
+
+    const apCost = this.movementPreviewAPCost;
+
+    // Check if we have enough AP
+    if (apCost > this.gameState.actionPoints) {
+      this.hud.showMessage('Not enough action points', 2000);
+      this.clearMovementPreview();
+      return;
+    }
+
+    // Send the move action
+    const action: MoveAction = {
+      type: 'MOVE',
+      playerId: this.client['playerId'],
+      unitId: this.selectedUnit.id,
+      path: this.movementPreviewPath,
+      apCost,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+
+    // Optimistic update
+    this.gameState.actionPoints -= apCost;
+    this.selectedUnit.position = this.movementPreviewDestination;
+    this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Update renderer
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+
+    this.hud.showMessage(`Moved for ${apCost} AP`, 1500);
+    this.clearMovementPreview();
+    this.deselectUnit();
+  }
+
+  /**
+   * Move selected unit to destination (legacy direct move - now uses preview)
    */
   private moveSelectedUnit(destination: HexCoord): void {
     if (!this.selectedUnit || !this.gameState) return;
