@@ -8,11 +8,11 @@ Web-based multiplayer implementation of the classic French board game "Full Meta
 
 | Component | Technology |
 |-----------|------------|
-| **Package Manager** | yarn |
+| **Runtime** | Bun |
 | **Language** | TypeScript (strict mode) |
-| **Rendering** | WebGPU (WebGL2 fallback) |
-| **Frontend** | Vanilla TypeScript or Preact |
-| **Backend** | Node.js with WebSocket |
+| **Rendering** | CSS/DOM (with WebGPU fallback) |
+| **Frontend** | Vanilla TypeScript, Vite |
+| **Backend** | Fastify with WebSocket |
 | **Issue Tracking** | Beads (`fmp-*` prefix) |
 
 ## Architecture (v1)
@@ -47,11 +47,12 @@ fmp/
 ## Development Commands
 
 ```bash
-yarn install          # Install dependencies
-yarn dev              # Start development server
-yarn build            # Production build
-yarn test             # Run tests
-yarn typecheck        # TypeScript validation
+bun install           # Install dependencies
+bun dev               # Start unified dev server (Vite + API on ports 5173/3000)
+bun dev:server        # Start API server only (with hot reload)
+bun build             # Production build (client + server)
+bun test              # Run tests
+bun run typecheck     # TypeScript validation
 ```
 
 ## Beads Workflow
