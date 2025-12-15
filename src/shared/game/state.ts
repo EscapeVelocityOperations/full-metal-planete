@@ -1162,3 +1162,179 @@ export function getWinners(state: GameState): string[] {
     .filter(([_, score]) => score === maxScore)
     .map(([playerId]) => playerId);
 }
+
+// ============================================================================
+// Lift-Off System
+// ============================================================================
+
+/**
+ * Calculate the AP cost to lift off.
+ * Base cost: 1 AP + 1 AP per destroyed turret
+ */
+export function calculateTakeOffCost(state: GameState, playerId: string): number {
+  const astronef = state.units.find(
+    (u) => u.type === UnitType.Astronef && u.owner === playerId
+  );
+  if (!astronef) return 999; // Cannot lift off without astronef
+
+  const destroyedTurrets = astronef.turrets?.filter((t) => t.isDestroyed).length ?? 0;
+  return 1 + destroyedTurrets;
+}
+
+/**
+ * Check if a player can lift off.
+ * Requires enough AP and must be in playing phase (turns 3+).
+ */
+export function canLiftOff(state: GameState, playerId: string): boolean {
+  // Must be current player
+  if (state.currentPlayer !== playerId) return false;
+
+  // Must be in playing phase or lift-off decision phase
+  if (state.phase !== GamePhase.Playing && state.phase !== GamePhase.LiftOffDecision) {
+    return false;
+  }
+
+  // Must be turn 21+ for lift-off
+  if (state.turn < 21) return false;
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || player.hasLiftedOff) return false;
+
+  const cost = calculateTakeOffCost(state, playerId);
+  return state.actionPoints >= cost;
+}
+
+/**
+ * Execute the lift-off for a player.
+ * Marks player as lifted off, deducts AP, and removes astronef from board.
+ */
+export function executeLiftOff(state: GameState, playerId: string): GameState {
+  if (!canLiftOff(state, playerId)) {
+    return state;
+  }
+
+  const cost = calculateTakeOffCost(state, playerId);
+  const astronef = state.units.find(
+    (u) => u.type === UnitType.Astronef && u.owner === playerId
+  );
+
+  if (!astronef) return state;
+
+  // Mark astronef as lifted off (keep in units for score calculation)
+  const newUnits = state.units.map((u) => {
+    if (u.id === astronef.id) {
+      return {
+        ...u,
+        hasLiftedOff: true,
+        position: null, // Remove from board
+      };
+    }
+    return u;
+  });
+
+  // Mark player as lifted off
+  const newPlayers = state.players.map((p) => {
+    if (p.id === playerId) {
+      return {
+        ...p,
+        hasLiftedOff: true,
+        liftOffTurn: state.turn,
+      };
+    }
+    return p;
+  });
+
+  return {
+    ...state,
+    actionPoints: state.actionPoints - cost,
+    units: newUnits,
+    players: newPlayers,
+  };
+}
+
+/**
+ * Record a player's lift-off decision (Turn 21 secret decision).
+ * true = lift off at turn 21, false = stay until turn 25
+ */
+export function setLiftOffDecision(
+  state: GameState,
+  playerId: string,
+  decision: boolean
+): GameState {
+  if (state.phase !== GamePhase.LiftOffDecision) {
+    return state;
+  }
+
+  return {
+    ...state,
+    liftOffDecisions: {
+      ...state.liftOffDecisions,
+      [playerId]: decision,
+    },
+  };
+}
+
+/**
+ * Check if all players have made their lift-off decision.
+ */
+export function allLiftOffDecisionsMade(state: GameState): boolean {
+  return state.players.every(
+    (p) => state.liftOffDecisions[p.id] !== null && state.liftOffDecisions[p.id] !== undefined
+  );
+}
+
+/**
+ * Process lift-off decisions at the end of turn 21.
+ * Players who chose to lift off immediately do so.
+ */
+export function processLiftOffDecisions(state: GameState): GameState {
+  let newState = state;
+
+  for (const player of state.players) {
+    if (state.liftOffDecisions[player.id] === true && !player.hasLiftedOff) {
+      // Give player enough AP to lift off if they decided to
+      const cost = calculateTakeOffCost(newState, player.id);
+      const tempState = {
+        ...newState,
+        currentPlayer: player.id,
+        actionPoints: cost, // Ensure they have enough AP
+      };
+      newState = executeLiftOff(tempState, player.id);
+    }
+  }
+
+  // Transition to Playing phase for remaining players
+  return {
+    ...newState,
+    phase: GamePhase.Playing,
+  };
+}
+
+/**
+ * Force lift-off for all remaining players at turn 25.
+ * Players who cannot pay the cost are stranded.
+ */
+export function forceFinalLiftOff(state: GameState): GameState {
+  let newState = state;
+
+  for (const player of state.players) {
+    if (!player.hasLiftedOff) {
+      // Check if player can afford lift-off
+      const cost = calculateTakeOffCost(newState, player.id);
+      if (newState.actionPoints >= cost) {
+        const tempState = {
+          ...newState,
+          currentPlayer: player.id,
+          actionPoints: cost,
+        };
+        newState = executeLiftOff(tempState, player.id);
+      }
+      // If they can't afford it, they're stranded (hasLiftedOff remains false)
+    }
+  }
+
+  return {
+    ...newState,
+    phase: GamePhase.Finished,
+  };
+}

@@ -421,10 +421,200 @@ export class HUD {
     this.instructionsEl.style.display = 'none';
   }
 
+  // ============================================================================
+  // Lift-Off Decision UI
+  // ============================================================================
+
+  private liftOffDecisionCallback: ((decision: boolean) => void) | null = null;
+  private liftOffActionCallback: (() => void) | null = null;
+  private liftOffModal: HTMLElement | null = null;
+  private liftOffBtn: HTMLButtonElement | null = null;
+
+  /**
+   * Show the lift-off decision modal (Turn 21)
+   * Player chooses to lift off now or stay until turn 25
+   */
+  showLiftOffDecision(takeOffCost: number, callback: (decision: boolean) => void): void {
+    this.liftOffDecisionCallback = callback;
+
+    // Create modal if it doesn't exist
+    if (!this.liftOffModal) {
+      this.liftOffModal = document.createElement('div');
+      this.liftOffModal.id = 'lift-off-modal';
+      this.liftOffModal.className = 'modal';
+      document.body.appendChild(this.liftOffModal);
+    }
+
+    this.liftOffModal.innerHTML = `
+      <div class="modal-content lift-off-decision">
+        <h2>Lift-Off Decision (Turn 21)</h2>
+        <p>It's time to decide your strategy:</p>
+        <div class="decision-options">
+          <div class="decision-option">
+            <h3>Lift Off Now</h3>
+            <p>Take off immediately and secure your current cargo.</p>
+            <p class="cost">Take-off cost: <strong>${takeOffCost} AP</strong></p>
+            <button id="lift-off-now-btn" class="btn btn-primary">Lift Off Now</button>
+          </div>
+          <div class="decision-option">
+            <h3>Stay Until Turn 25</h3>
+            <p>Continue playing for 4 more turns. Risk vs reward!</p>
+            <p class="warning">⚠️ Must lift off by turn 25 or be stranded.</p>
+            <button id="stay-btn" class="btn btn-secondary">Stay</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.liftOffModal.style.display = 'flex';
+
+    // Add event listeners
+    const liftOffNowBtn = document.getElementById('lift-off-now-btn');
+    const stayBtn = document.getElementById('stay-btn');
+
+    liftOffNowBtn?.addEventListener('click', () => {
+      this.hideLiftOffDecision();
+      if (this.liftOffDecisionCallback) {
+        this.liftOffDecisionCallback(true);
+      }
+    });
+
+    stayBtn?.addEventListener('click', () => {
+      this.hideLiftOffDecision();
+      if (this.liftOffDecisionCallback) {
+        this.liftOffDecisionCallback(false);
+      }
+    });
+  }
+
+  /**
+   * Hide the lift-off decision modal
+   */
+  hideLiftOffDecision(): void {
+    if (this.liftOffModal) {
+      this.liftOffModal.style.display = 'none';
+    }
+  }
+
+  /**
+   * Show lift-off button (during turns 21-25 when player can lift off)
+   */
+  showLiftOffButton(takeOffCost: number, currentAP: number): void {
+    if (!this.liftOffBtn) {
+      this.liftOffBtn = document.createElement('button');
+      this.liftOffBtn.id = 'lift-off-btn';
+      this.liftOffBtn.className = 'btn btn-liftoff';
+
+      // Add next to end turn button
+      this.endTurnBtn.parentElement?.appendChild(this.liftOffBtn);
+
+      this.liftOffBtn.addEventListener('click', () => {
+        if (this.liftOffActionCallback) {
+          this.liftOffActionCallback();
+        }
+      });
+    }
+
+    const canAfford = currentAP >= takeOffCost;
+    this.liftOffBtn.textContent = `🚀 Lift Off (${takeOffCost} AP)`;
+    this.liftOffBtn.disabled = !canAfford;
+    this.liftOffBtn.style.display = 'inline-block';
+
+    if (!canAfford) {
+      this.liftOffBtn.title = `Need ${takeOffCost} AP to lift off (you have ${currentAP})`;
+    } else {
+      this.liftOffBtn.title = 'Lift off and end the game for yourself';
+    }
+  }
+
+  /**
+   * Hide lift-off button
+   */
+  hideLiftOffButton(): void {
+    if (this.liftOffBtn) {
+      this.liftOffBtn.style.display = 'none';
+    }
+  }
+
+  /**
+   * Set lift-off action callback (manual lift-off during turns 21-25)
+   */
+  onLiftOff(callback: () => void): void {
+    this.liftOffActionCallback = callback;
+  }
+
+  /**
+   * Show game over modal with final scores
+   */
+  showGameOver(scores: Record<string, number>, playerNames: Record<string, string>, winners: string[]): void {
+    // Create modal if it doesn't exist
+    if (!this.liftOffModal) {
+      this.liftOffModal = document.createElement('div');
+      this.liftOffModal.id = 'lift-off-modal';
+      this.liftOffModal.className = 'modal';
+      document.body.appendChild(this.liftOffModal);
+    }
+
+    const sortedPlayers = Object.entries(scores).sort(([, a], [, b]) => b - a);
+    const winnerText = winners.length > 1
+      ? `Winners: ${winners.map(id => playerNames[id] || id).join(', ')}`
+      : `Winner: ${playerNames[winners[0]] || winners[0]}`;
+
+    const scoreRows = sortedPlayers.map(([playerId, score], index) => {
+      const isWinner = winners.includes(playerId);
+      const name = playerNames[playerId] || playerId;
+      return `
+        <tr class="${isWinner ? 'winner' : ''}">
+          <td>${index + 1}</td>
+          <td>${name}${isWinner ? ' 🏆' : ''}</td>
+          <td>${score}</td>
+        </tr>
+      `;
+    }).join('');
+
+    this.liftOffModal.innerHTML = `
+      <div class="modal-content game-over">
+        <h2>🎉 Game Over!</h2>
+        <h3>${winnerText}</h3>
+        <table class="scores-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Player</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${scoreRows}
+          </tbody>
+        </table>
+        <p class="scoring-info">
+          Scoring: 2 pts/mineral, 1 pt/equipment, 1 pt/intact turret<br>
+          (Only counts if Astronef lifted off successfully)
+        </p>
+        <button id="game-over-close-btn" class="btn btn-primary">Close</button>
+      </div>
+    `;
+
+    this.liftOffModal.style.display = 'flex';
+
+    document.getElementById('game-over-close-btn')?.addEventListener('click', () => {
+      this.liftOffModal!.style.display = 'none';
+    });
+  }
+
   /**
    * Clean up resources
    */
   destroy(): void {
     this.stopTimer();
+    if (this.liftOffModal) {
+      this.liftOffModal.remove();
+      this.liftOffModal = null;
+    }
+    if (this.liftOffBtn) {
+      this.liftOffBtn.remove();
+      this.liftOffBtn = null;
+    }
   }
 }

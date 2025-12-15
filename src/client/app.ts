@@ -9,11 +9,11 @@ import { GameClient } from './game-client';
 import { HUD, type LobbyPlayer, type PhaseInfo } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, TideLevel, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType, type GamePhase } from '@/shared/game/types';
+import { UnitType, TideLevel, GamePhase, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType } from '@/shared/game/types';
 import { hexKey, hexRotateAround } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
-import { getTideForecast, getPlayerConverterCount } from '@/shared/game/state';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, getWinners, setLiftOffDecision } from '@/shared/game/state';
 
 export interface GameConfig {
   gameId: string;
@@ -163,6 +163,10 @@ export class GameApp {
 
     this.hud.onReady(() => {
       this.handleReady();
+    });
+
+    this.hud.onLiftOff(() => {
+      this.handleLiftOff();
     });
   }
 
@@ -540,7 +544,49 @@ export class GameApp {
     }
 
     this.checkMyTurn();
+    this.updateLiftOffUI();
     this.render();
+  }
+
+  /**
+   * Update lift-off UI elements based on current turn
+   */
+  private updateLiftOffUI(): void {
+    if (!this.gameState || !this.isMyTurn) {
+      this.hud.hideLiftOffButton();
+      this.hud.hideLiftOffDecision();
+      return;
+    }
+
+    const playerId = this.client['playerId'];
+    const player = this.gameState.players.find(p => p.id === playerId);
+
+    // Player already lifted off - no UI needed
+    if (player?.hasLiftedOff) {
+      this.hud.hideLiftOffButton();
+      this.hud.hideLiftOffDecision();
+      return;
+    }
+
+    const turn = this.gameState.turn;
+    const cost = calculateTakeOffCost(this.gameState, playerId);
+
+    // Turn 21: Show secret lift-off decision modal (once per player)
+    if (turn === 21 && !this.gameState.liftOffDecisions?.[playerId]) {
+      this.hud.showLiftOffDecision(cost, (decision) => {
+        this.handleLiftOffDecision(decision);
+      });
+    }
+
+    // Turns 21-25: Show lift-off button
+    if (turn >= 21 && turn <= 25) {
+      this.hud.showLiftOffButton(cost, this.gameState.actionPoints);
+    } else {
+      this.hud.hideLiftOffButton();
+    }
+
+    // Check for game over
+    this.checkGameOver();
   }
 
   /**
@@ -1131,6 +1177,96 @@ export class GameApp {
       this.hud.showMessage('Turn ended', 2000);
     }
     this.deselectUnit();
+  }
+
+  /**
+   * Handle lift-off button click (during turns 21-25)
+   */
+  private handleLiftOff(): void {
+    if (!this.isMyTurn || !this.gameState) return;
+
+    const playerId = this.client['playerId'];
+
+    if (!canLiftOff(this.gameState, playerId)) {
+      const cost = calculateTakeOffCost(this.gameState, playerId);
+      this.hud.showMessage(`Cannot lift off (need ${cost} AP)`, 2000);
+      return;
+    }
+
+    // Execute lift-off
+    this.gameState = executeLiftOff(this.gameState, playerId);
+
+    // Send lift-off action to server
+    this.client.sendAction({
+      type: 'LIFT_OFF',
+      playerId,
+      decision: 'now',
+      timestamp: Date.now(),
+    });
+
+    this.hud.hideLiftOffButton();
+    this.hud.showMessage('Astronef lifted off!', 3000);
+    this.updateGameState(this.gameState);
+
+    // Check if game is over (all players lifted off or Turn 25 ended)
+    this.checkGameOver();
+  }
+
+  /**
+   * Handle Turn 21 lift-off decision (secret decision)
+   */
+  private handleLiftOffDecision(decision: boolean): void {
+    if (!this.gameState) return;
+
+    const playerId = this.client['playerId'];
+    const actionDecision: 'now' | 'stay' = decision ? 'now' : 'stay';
+    this.gameState = setLiftOffDecision(this.gameState, playerId, decision);
+
+    // Send decision to server (uses same LIFT_OFF action type)
+    this.client.sendAction({
+      type: 'LIFT_OFF',
+      playerId,
+      decision: actionDecision,
+      timestamp: Date.now(),
+    });
+
+    this.hud.hideLiftOffDecision();
+
+    if (decision) {
+      // Execute lift-off immediately if they chose 'now'
+      this.gameState = executeLiftOff(this.gameState, playerId);
+      this.hud.hideLiftOffButton();
+      this.hud.showMessage('Astronef lifted off!', 3000);
+      this.updateGameState(this.gameState);
+      this.checkGameOver();
+    } else {
+      this.hud.showMessage('You decided to stay on the planet.', 3000);
+    }
+  }
+
+  /**
+   * Check if game is over and display results
+   */
+  private checkGameOver(): void {
+    if (!this.gameState) return;
+
+    // Game ends when all players have lifted off or Turn 25 ends
+    const allLiftedOff = this.gameState.players.every(p => p.hasLiftedOff);
+    const turn25Over = this.gameState.turn >= 25;
+
+    if (allLiftedOff || turn25Over) {
+      const scores = calculateAllScores(this.gameState);
+      const winners = getWinners(this.gameState);
+
+      // Build player names map
+      const playerNames: Record<string, string> = {};
+      for (const player of this.gameState.players) {
+        const lobbyPlayer = this.lobbyPlayers.find(p => p.id === player.id);
+        playerNames[player.id] = lobbyPlayer?.name || player.id;
+      }
+
+      this.hud.showGameOver(scores, playerNames, winners);
+    }
   }
 
   /**
