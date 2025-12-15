@@ -13,6 +13,7 @@ Web-based multiplayer implementation of the classic French board game "Full Meta
 | **Rendering** | CSS/DOM (with WebGPU fallback) |
 | **Frontend** | Vanilla TypeScript, Vite |
 | **Backend** | Fastify with WebSocket |
+| **Testing** | Bun test, Playwright E2E |
 | **Issue Tracking** | Beads (`fmp-*` prefix) |
 
 ## Architecture (v1)
@@ -53,6 +54,7 @@ bun dev:server        # Start API server only (with hot reload)
 bun build             # Production build (client + server)
 bun test              # Run tests
 bun run typecheck     # TypeScript validation
+bun run test:e2e      # Run Playwright E2E tests
 ```
 
 ## Beads Workflow

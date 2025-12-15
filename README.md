@@ -29,8 +29,7 @@ Full Metal Planete is a turn-based strategy game for 2-4 players. Each player co
 
 ### Prerequisites
 
-- Node.js 18+
-- Yarn package manager
+- [Bun](https://bun.sh/) runtime (v1.0+)
 
 ### Installation
 
@@ -40,22 +39,22 @@ git clone <repository-url>
 cd fmp
 
 # Install dependencies
-yarn install
+bun install
 
-# Start development servers
-yarn dev
+# Start development server (client + API)
+bun dev
 ```
 
-This starts both the client (Vite) and server (Express + WebSocket) in development mode.
+This starts the Vite dev server with integrated API.
 
 ### Running in Production
 
 ```bash
-# Build the client
-yarn build:client
+# Build everything
+bun run build
 
 # Start the server
-yarn start
+bun start
 ```
 
 ## How to Play
@@ -105,8 +104,10 @@ src/
 
 ## Tech Stack
 
+- **Runtime**: [Bun](https://bun.sh/)
 - **Frontend**: TypeScript, Vite, CSS Grid for hex rendering
-- **Backend**: Node.js, Express, WebSocket (ws)
+- **Backend**: Bun server with WebSocket
+- **Testing**: Bun test, Playwright for E2E
 - **Storage**: In-memory (default) or Redis for persistence
 
 ## Credits
