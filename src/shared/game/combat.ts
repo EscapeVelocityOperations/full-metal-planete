@@ -393,3 +393,228 @@ export function canUnitFire(unit: Unit): boolean {
 export function getActiveCombatUnits(units: Unit[], playerId: string): Unit[] {
   return units.filter((u) => u.owner === playerId && canUnitFire(u));
 }
+
+// ============================================================================
+// Fireable Hexes (Range Visualization)
+// ============================================================================
+
+/**
+ * Get all hexes that a unit can fire at.
+ * Used to visualize firing range in UI.
+ */
+export function getFireableHexes(
+  unit: Unit,
+  getTerrainAt: TerrainGetter
+): HexCoord[] {
+  if (!unit.position) return [];
+
+  const props = UNIT_PROPERTIES[unit.type];
+  if (props.combatRange === 0) return [];
+  if (!canUnitFire(unit)) return [];
+
+  const terrain = getTerrainAt(unit.position);
+  const range = getCombatRange(unit, terrain);
+
+  // Get all hexes in range, excluding own position
+  return hexesInRange(unit.position, range).filter(
+    (hex) => !(hex.q === unit.position!.q && hex.r === unit.position!.r)
+  );
+}
+
+/**
+ * Get the intersection of two units' firing ranges.
+ * Used to show valid target hexes when 2 combat units are selected.
+ */
+export function getSharedFireableHexes(
+  unit1: Unit,
+  unit2: Unit,
+  getTerrainAt: TerrainGetter
+): HexCoord[] {
+  const hexes1 = getFireableHexes(unit1, getTerrainAt);
+  const hexes2 = getFireableHexes(unit2, getTerrainAt);
+
+  // Convert second list to a set for O(1) lookup
+  const hexes2Set = new Set(hexes2.map(hexKey));
+
+  // Return intersection
+  return hexes1.filter((hex) => hexes2Set.has(hexKey(hex)));
+}
+
+/**
+ * Get enemy units that are valid targets for two selected shooters.
+ * Returns units at hexes within range of both shooters.
+ */
+export function getValidTargets(
+  shooter1: Unit,
+  shooter2: Unit,
+  allUnits: Unit[],
+  getTerrainAt: TerrainGetter
+): Unit[] {
+  // Get shared fireable hexes
+  const sharedHexes = getSharedFireableHexes(shooter1, shooter2, getTerrainAt);
+  const sharedHexSet = new Set(sharedHexes.map(hexKey));
+
+  // Find enemy units on those hexes
+  const owner = shooter1.owner;
+  return allUnits.filter((unit) => {
+    if (!unit.position) return false;
+    if (unit.owner === owner) return false; // Can't shoot own units
+    return sharedHexSet.has(hexKey(unit.position));
+  });
+}
+
+// ============================================================================
+// Combat Execution
+// ============================================================================
+
+/**
+ * Result of executing a shot action.
+ */
+export interface ShotResult {
+  success: boolean;
+  error?: string;
+  destroyedUnit?: Unit;
+  updatedUnits: Unit[];
+  apCost: number;
+}
+
+/**
+ * Execute a shot to destroy an enemy unit.
+ * Requires 2 attackers in range, deducts AP and shots.
+ *
+ * @param attackers - Two combat units performing the shot
+ * @param target - Unit to destroy
+ * @param units - All units in game
+ * @param getTerrainAt - Terrain lookup function
+ * @returns ShotResult with updated unit list (target removed, attackers' shots decremented)
+ */
+export function executeShot(
+  attackers: [Unit, Unit],
+  target: Unit,
+  units: Unit[],
+  getTerrainAt: TerrainGetter
+): ShotResult {
+  // Validate the shot
+  const validation = canDestroyTarget(attackers, target.position!, getTerrainAt);
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: validation.error,
+      updatedUnits: units,
+      apCost: 0,
+    };
+  }
+
+  // Verify target is an enemy
+  if (target.owner === attackers[0].owner) {
+    return {
+      success: false,
+      error: 'Cannot shoot your own units',
+      updatedUnits: units,
+      apCost: 0,
+    };
+  }
+
+  // Create updated units list:
+  // 1. Remove the destroyed target
+  // 2. Decrement shots remaining for both attackers
+  const updatedUnits = units
+    .filter((u) => u.id !== target.id) // Remove destroyed unit
+    .map((u) => {
+      // Decrement shots for attackers
+      if (u.id === attackers[0].id || u.id === attackers[1].id) {
+        return {
+          ...u,
+          shotsRemaining: u.shotsRemaining - 1,
+        };
+      }
+      return u;
+    });
+
+  return {
+    success: true,
+    destroyedUnit: target,
+    updatedUnits,
+    apCost: GAME_CONSTANTS.AP_COST_FIRE, // 2 AP (1 per shooter)
+  };
+}
+
+/**
+ * Result of executing a capture action.
+ */
+export interface CaptureResult {
+  success: boolean;
+  error?: string;
+  capturedUnit?: Unit;
+  updatedUnits: Unit[];
+  apCost: number;
+}
+
+/**
+ * Execute a capture to take control of an enemy unit.
+ * Requires 2 adjacent combat units, all units must be free from enemy fire.
+ *
+ * @param attackers - Two combat units performing the capture
+ * @param target - Unit to capture
+ * @param allUnits - All units in game
+ * @param getTerrainAt - Terrain lookup function
+ * @returns CaptureResult with updated unit list (target ownership changed)
+ */
+export function executeCapture(
+  attackers: [Unit, Unit],
+  target: Unit,
+  allUnits: Unit[],
+  getTerrainAt: TerrainGetter
+): CaptureResult {
+  // Validate the capture
+  const validation = canCaptureTarget(attackers, target, allUnits, getTerrainAt);
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: validation.error,
+      updatedUnits: allUnits,
+      apCost: 0,
+    };
+  }
+
+  const newOwner = attackers[0].owner;
+
+  // Create updated units list:
+  // Change ownership of target unit
+  const updatedUnits = allUnits.map((u) => {
+    if (u.id === target.id) {
+      return {
+        ...u,
+        owner: newOwner,
+        // Reset combat state for newly captured unit
+        shotsRemaining: UNIT_PROPERTIES[u.type].maxShots || 0,
+        isNeutralized: false,
+      };
+    }
+    return u;
+  });
+
+  // Find the captured unit in updated list
+  const capturedUnit = updatedUnits.find((u) => u.id === target.id);
+
+  return {
+    success: true,
+    capturedUnit,
+    updatedUnits,
+    apCost: GAME_CONSTANTS.AP_COST_CAPTURE, // 1 AP
+  };
+}
+
+// ============================================================================
+// Turn Reset
+// ============================================================================
+
+/**
+ * Reset shots remaining for all units at start of turn.
+ */
+export function resetShotsForTurn(units: Unit[]): Unit[] {
+  return units.map((unit) => ({
+    ...unit,
+    shotsRemaining: UNIT_PROPERTIES[unit.type].maxShots || 0,
+  }));
+}

@@ -557,6 +557,12 @@ import {
   isCombatUnit,
   canUnitFire,
   getActiveCombatUnits,
+  getFireableHexes,
+  getSharedFireableHexes,
+  getValidTargets,
+  executeShot,
+  executeCapture,
+  resetShotsForTurn,
 } from '../combat';
 
 describe('Combat Unit Detection', () => {
@@ -753,6 +759,284 @@ describe('Capture Edge Cases', () => {
 
       expect(result.valid).toBe(false);
       expect(result.error).toContain('neutralized');
+    });
+  });
+});
+
+// ============================================================================
+// NEW TESTS: Fireable Hexes and Range Visualization
+// ============================================================================
+
+describe('Fireable Hexes', () => {
+  describe('getFireableHexes', () => {
+    it('should return all hexes within combat range', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const hexes = getFireableHexes(tank, () => TerrainType.Land);
+
+      // Tank has range 2, so should include hexes at distance 1 and 2
+      // But not the unit's own hex
+      expect(hexes.length).toBeGreaterThan(0);
+      expect(hexes.some(h => h.q === 0 && h.r === 0)).toBe(false); // Own hex excluded
+      expect(hexes.some(h => h.q === 1 && h.r === 0)).toBe(true); // Distance 1
+      expect(hexes.some(h => h.q === 2 && h.r === 0)).toBe(true); // Distance 2
+    });
+
+    it('should return empty array for non-combat unit', () => {
+      const crab = createUnit('crab-1', UnitType.Crab, 'p1', { q: 0, r: 0 });
+      const hexes = getFireableHexes(crab, () => TerrainType.Land);
+      expect(hexes).toHaveLength(0);
+    });
+
+    it('should return empty array when unit has no shots', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { shotsRemaining: 0 });
+      const hexes = getFireableHexes(tank, () => TerrainType.Land);
+      expect(hexes).toHaveLength(0);
+    });
+
+    it('should return empty array when unit is stuck', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { isStuck: true });
+      const hexes = getFireableHexes(tank, () => TerrainType.Land);
+      expect(hexes).toHaveLength(0);
+    });
+
+    it('should return empty array when unit has no position', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      tank.position = null;
+      const hexes = getFireableHexes(tank, () => TerrainType.Land);
+      expect(hexes).toHaveLength(0);
+    });
+
+    it('should include mountain bonus for tank on mountain', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const hexes = getFireableHexes(tank, () => TerrainType.Mountain);
+
+      // Tank on mountain has range 3
+      expect(hexes.some(h => h.q === 3 && h.r === 0)).toBe(true); // Distance 3
+    });
+  });
+
+  describe('getSharedFireableHexes', () => {
+    it('should return intersection of two units firing ranges', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 4, r: 0 });
+
+      const sharedHexes = getSharedFireableHexes(tank1, tank2, () => TerrainType.Land);
+
+      // Tanks at (0,0) and (4,0) with range 2
+      // Intersection should be at (2,0) which is distance 2 from both
+      expect(sharedHexes.some(h => h.q === 2 && h.r === 0)).toBe(true);
+    });
+
+    it('should return empty array when ranges do not overlap', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 10, r: 0 });
+
+      const sharedHexes = getSharedFireableHexes(tank1, tank2, () => TerrainType.Land);
+
+      expect(sharedHexes).toHaveLength(0);
+    });
+
+    it('should return empty array when one unit cannot fire', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 }, { shotsRemaining: 0 });
+
+      const sharedHexes = getSharedFireableHexes(tank1, tank2, () => TerrainType.Land);
+
+      expect(sharedHexes).toHaveLength(0);
+    });
+  });
+
+  describe('getValidTargets', () => {
+    it('should return enemy units in shared range', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 4, r: 0 });
+      const enemyTank = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 2, r: 0 });
+
+      const allUnits = [tank1, tank2, enemyTank];
+      const targets = getValidTargets(tank1, tank2, allUnits, () => TerrainType.Land);
+
+      expect(targets).toHaveLength(1);
+      expect(targets[0].id).toBe('enemy-tank');
+    });
+
+    it('should not include friendly units', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 4, r: 0 });
+      const friendlyTank = createUnit('friendly-tank', UnitType.Tank, 'p1', { q: 2, r: 0 });
+
+      const allUnits = [tank1, tank2, friendlyTank];
+      const targets = getValidTargets(tank1, tank2, allUnits, () => TerrainType.Land);
+
+      expect(targets).toHaveLength(0);
+    });
+
+    it('should return empty when no enemies in range', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 });
+      const enemyTank = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 10, r: 0 });
+
+      const allUnits = [tank1, tank2, enemyTank];
+      const targets = getValidTargets(tank1, tank2, allUnits, () => TerrainType.Land);
+
+      expect(targets).toHaveLength(0);
+    });
+
+    it('should not include units without position', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 4, r: 0 });
+      const enemyTank = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 2, r: 0 });
+      enemyTank.position = null;
+
+      const allUnits = [tank1, tank2, enemyTank];
+      const targets = getValidTargets(tank1, tank2, allUnits, () => TerrainType.Land);
+
+      expect(targets).toHaveLength(0);
+    });
+  });
+});
+
+// ============================================================================
+// NEW TESTS: Combat Execution
+// ============================================================================
+
+describe('Combat Execution', () => {
+  describe('executeShot', () => {
+    it('should destroy target and decrement attackers shots', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 });
+      const target = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 1, r: 0 });
+
+      const allUnits = [tank1, tank2, target];
+      const result = executeShot([tank1, tank2], target, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(true);
+      expect(result.apCost).toBe(2);
+      expect(result.destroyedUnit?.id).toBe('enemy-tank');
+      expect(result.updatedUnits).toHaveLength(2); // Target removed
+      expect(result.updatedUnits.find(u => u.id === 'enemy-tank')).toBeUndefined();
+
+      // Attackers should have 1 shot remaining (started with 2)
+      const updatedTank1 = result.updatedUnits.find(u => u.id === 'tank-1');
+      const updatedTank2 = result.updatedUnits.find(u => u.id === 'tank-2');
+      expect(updatedTank1?.shotsRemaining).toBe(1);
+      expect(updatedTank2?.shotsRemaining).toBe(1);
+    });
+
+    it('should fail when target is out of range', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 1, r: 0 });
+      const target = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 10, r: 0 });
+
+      const allUnits = [tank1, tank2, target];
+      const result = executeShot([tank1, tank2], target, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(false);
+      expect(result.apCost).toBe(0);
+      expect(result.updatedUnits).toHaveLength(3); // No changes
+    });
+
+    it('should fail when trying to shoot own unit', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 });
+      const friendlyTank = createUnit('friendly-tank', UnitType.Tank, 'p1', { q: 1, r: 0 });
+
+      const allUnits = [tank1, tank2, friendlyTank];
+      const result = executeShot([tank1, tank2], friendlyTank, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('own units');
+    });
+
+    it('should fail when attacker has no shots remaining', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 }, { shotsRemaining: 0 });
+      const target = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 1, r: 0 });
+
+      const allUnits = [tank1, tank2, target];
+      const result = executeShot([tank1, tank2], target, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('executeCapture', () => {
+    it('should change ownership of captured unit', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 });
+      const target = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 1, r: 0 });
+
+      const allUnits = [tank1, tank2, target];
+      const result = executeCapture([tank1, tank2], target, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(true);
+      expect(result.apCost).toBe(1);
+      expect(result.capturedUnit?.owner).toBe('p1');
+      expect(result.capturedUnit?.isNeutralized).toBe(false);
+
+      const capturedInList = result.updatedUnits.find(u => u.id === 'enemy-tank');
+      expect(capturedInList?.owner).toBe('p1');
+    });
+
+    it('should reset shots for captured unit', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 });
+      const target = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 1, r: 0 }, { shotsRemaining: 0 });
+
+      const allUnits = [tank1, tank2, target];
+      const result = executeCapture([tank1, tank2], target, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(true);
+      // Captured unit should have max shots (can be used same turn)
+      expect(result.capturedUnit?.shotsRemaining).toBe(2);
+    });
+
+    it('should fail when attackers not adjacent', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 5, r: 0 });
+      const target = createUnit('enemy-tank', UnitType.Tank, 'p2', { q: 3, r: 0 });
+
+      const allUnits = [tank1, tank2, target];
+      const result = executeCapture([tank1, tank2], target, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(false);
+      expect(result.apCost).toBe(0);
+    });
+
+    it('should fail when trying to capture own unit', () => {
+      const tank1 = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const tank2 = createUnit('tank-2', UnitType.Tank, 'p1', { q: 2, r: 0 });
+      const friendlyTank = createUnit('friendly-tank', UnitType.Tank, 'p1', { q: 1, r: 0 });
+
+      const allUnits = [tank1, tank2, friendlyTank];
+      const result = executeCapture([tank1, tank2], friendlyTank, allUnits, () => TerrainType.Land);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('enemy');
+    });
+  });
+
+  describe('resetShotsForTurn', () => {
+    it('should reset shots for all combat units', () => {
+      const units = [
+        createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { shotsRemaining: 0 }),
+        createUnit('tank-2', UnitType.Tank, 'p1', { q: 1, r: 0 }, { shotsRemaining: 1 }),
+        createUnit('crab-1', UnitType.Crab, 'p1', { q: 2, r: 0 }),
+      ];
+
+      const resetUnits = resetShotsForTurn(units);
+
+      expect(resetUnits.find(u => u.id === 'tank-1')?.shotsRemaining).toBe(2);
+      expect(resetUnits.find(u => u.id === 'tank-2')?.shotsRemaining).toBe(2);
+      expect(resetUnits.find(u => u.id === 'crab-1')?.shotsRemaining).toBe(0); // Non-combat
+    });
+
+    it('should not mutate original units', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, { shotsRemaining: 0 });
+      const units = [tank];
+
+      resetShotsForTurn(units);
+
+      expect(tank.shotsRemaining).toBe(0); // Original unchanged
     });
   });
 });
