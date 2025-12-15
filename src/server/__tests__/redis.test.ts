@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import { RedisManager } from '../redis.js';
 import type { GameRoom, GameState, GameAction } from '../types.js';
+import { GamePhase, TideLevel } from '../../shared/game/types.js';
 
 describe('RedisManager', () => {
   let redis: RedisManager;
@@ -88,16 +89,17 @@ describe('RedisManager', () => {
     const mockGameState: GameState = {
       gameId: 'abc123',
       turn: 1,
-      phase: 'landing',
+      phase: GamePhase.Landing,
       currentPlayer: 'p1-xyz',
       turnOrder: ['p1-xyz', 'p2-abc'],
       turnStartTime: Date.now(),
       turnTimeLimit: 180000,
       actionPoints: 15,
       savedActionPoints: { 'p1-xyz': 0, 'p2-abc': 0 },
-      currentTide: 'normal',
-      tideDeck: ['low', 'high', 'normal'],
+      currentTide: TideLevel.Normal,
+      tideDeck: [TideLevel.Low, TideLevel.High, TideLevel.Normal],
       tideDiscard: [],
+      terrain: [],
       units: [],
       minerals: [],
       bridges: [],
@@ -263,16 +265,17 @@ describe('RedisManager', () => {
       const mockGameState: GameState = {
         gameId: 'abc123',
         turn: 1,
-        phase: 'playing',
+        phase: GamePhase.Playing,
         currentPlayer: 'p1',
         turnOrder: ['p1'],
         turnStartTime: Date.now(),
         turnTimeLimit: 180000,
         actionPoints: 15,
         savedActionPoints: {},
-        currentTide: 'normal',
+        currentTide: TideLevel.Normal,
         tideDeck: [],
         tideDiscard: [],
+        terrain: [],
         units: [],
         minerals: [],
         bridges: [],

@@ -84,7 +84,9 @@ describe('webgpu', () => {
 
       expect(renderer).toBeDefined();
       expect(renderer.backend).toBe('webgpu');
-      expect(renderer.device).toBeDefined();
+      if (renderer.backend === 'webgpu') {
+        expect(renderer.device).toBeDefined();
+      }
       expect(renderer.context).toBeDefined();
       expect(mockCanvas.getContext).toHaveBeenCalledWith('webgpu');
     });

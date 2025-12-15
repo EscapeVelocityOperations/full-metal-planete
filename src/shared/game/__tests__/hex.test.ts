@@ -577,7 +577,7 @@ describe('Hex Rotation', () => {
 });
 
 // Import pathfinding functions for extended tests
-import { findPath, getReachableHexes, hexKey } from '../hex';
+import { findPath, getReachableHexes } from '../hex';
 import { TerrainType, TideLevel, UnitType } from '../types';
 
 describe('Pathfinding', () => {

@@ -5,7 +5,7 @@
  * neighbor finding, and range utilities for flat-top hexagonal grids.
  */
 
-import { TideLevel, type HexCoord, type CubeCoord, type UnitType, type TerrainType } from './types';
+import { TideLevel, UnitType, type HexCoord, type CubeCoord, type TerrainType } from './types';
 import { UNIT_SHAPES, UNIT_PROPERTIES } from './types';
 import { canUnitEnterTerrain, canAstronefLandOn } from './terrain';
 
