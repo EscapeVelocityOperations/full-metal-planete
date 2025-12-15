@@ -32,3 +32,4 @@ Thumbs.db
 1
 /.playwright-mcp
 /e2e-screenshots
+.beads/.local_version
