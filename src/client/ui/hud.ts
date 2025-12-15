@@ -69,6 +69,12 @@ export class HUD {
   private tideForecast1El: HTMLElement;
   private tideForecast2El: HTMLElement;
 
+  // Scoreboard
+  private scoreboardPanel: HTMLElement;
+  private scoreboardToggle: HTMLButtonElement;
+  private scoreboardTbody: HTMLElement;
+  private scoreboardExpanded: boolean = true;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -99,6 +105,16 @@ export class HUD {
     this.tideForecastContainer = document.getElementById('tide-forecast-container')!;
     this.tideForecast1El = document.getElementById('tide-forecast-1')!;
     this.tideForecast2El = document.getElementById('tide-forecast-2')!;
+
+    // Scoreboard
+    this.scoreboardPanel = document.getElementById('scoreboard-panel')!;
+    this.scoreboardToggle = document.getElementById('scoreboard-toggle') as HTMLButtonElement;
+    this.scoreboardTbody = document.getElementById('scoreboard-body')!;
+
+    // Setup scoreboard toggle
+    this.scoreboardToggle?.addEventListener('click', () => {
+      this.toggleScoreboard();
+    });
   }
 
   /**
@@ -773,6 +789,188 @@ export class HUD {
     });
   }
 
+  // ============================================================================
+  // Scoreboard
+  // ============================================================================
+
+  /**
+   * Update the scoreboard with player statistics
+   */
+  updateScoreboard(
+    players: Array<{
+      id: string;
+      name: string;
+      color: string;
+      unitCount: number;
+      cargoCount: number;
+      score: number;
+      hasLiftedOff: boolean;
+    }>,
+    currentPlayerId: string
+  ): void {
+    if (!this.scoreboardTbody) return;
+
+    this.scoreboardTbody.innerHTML = '';
+
+    for (const player of players) {
+      const row = document.createElement('tr');
+      row.className = 'player-row';
+      if (player.id === currentPlayerId) {
+        row.classList.add('current-player');
+      }
+      if (player.hasLiftedOff) {
+        row.classList.add('lifted-off');
+      }
+
+      row.innerHTML = `
+        <td>
+          <span class="player-color-dot" style="background-color: ${this.getPlayerColorHex(player.color)}"></span>
+          ${player.name}
+          ${player.hasLiftedOff ? '<span class="liftoff-icon">🚀</span>' : ''}
+        </td>
+        <td>${player.unitCount}</td>
+        <td>${player.cargoCount}</td>
+        <td class="score-cell">${player.score}</td>
+      `;
+
+      this.scoreboardTbody.appendChild(row);
+    }
+  }
+
+  /**
+   * Convert player color name to hex value
+   */
+  private getPlayerColorHex(color: string): string {
+    const colorMap: Record<string, string> = {
+      red: '#e74c3c',
+      blue: '#3498db',
+      green: '#2ecc71',
+      yellow: '#f1c40f',
+      orange: '#e67e22',
+      purple: '#9b59b6',
+    };
+    return colorMap[color] || '#666';
+  }
+
+  /**
+   * Show the scoreboard panel
+   */
+  showScoreboard(): void {
+    if (this.scoreboardPanel) {
+      this.scoreboardPanel.classList.remove('hidden');
+    }
+  }
+
+  /**
+   * Hide the scoreboard panel
+   */
+  hideScoreboard(): void {
+    if (this.scoreboardPanel) {
+      this.scoreboardPanel.classList.add('hidden');
+    }
+  }
+
+  /**
+   * Toggle scoreboard expand/collapse
+   */
+  toggleScoreboard(): void {
+    this.scoreboardExpanded = !this.scoreboardExpanded;
+    const content = document.getElementById('scoreboard-content');
+    if (content) {
+      content.classList.toggle('collapsed', !this.scoreboardExpanded);
+    }
+    if (this.scoreboardToggle) {
+      this.scoreboardToggle.textContent = this.scoreboardExpanded ? '▼' : '▲';
+    }
+  }
+
+  // ============================================================================
+  // AP Save Dialog
+  // ============================================================================
+
+  private apSaveModal: HTMLElement | null = null;
+  private apSaveCallback: ((savedAP: number) => void) | null = null;
+
+  /**
+   * Show the AP save dialog at end of turn.
+   * Allows player to choose how much AP to save (0 to min(available, 10)).
+   */
+  showAPSaveDialog(availableAP: number, callback: (savedAP: number) => void): void {
+    this.apSaveCallback = callback;
+
+    const maxSave = Math.min(availableAP, 10);
+
+    // Create modal if it doesn't exist
+    if (!this.apSaveModal) {
+      this.apSaveModal = document.createElement('div');
+      this.apSaveModal.id = 'ap-save-modal';
+      this.apSaveModal.className = 'modal';
+      document.body.appendChild(this.apSaveModal);
+    }
+
+    // Generate AP save options
+    const options = [];
+    for (let i = 0; i <= maxSave; i++) {
+      options.push(`
+        <button class="ap-save-option" data-ap="${i}">
+          ${i === 0 ? 'Save Nothing' : `Save ${i} AP`}
+        </button>
+      `);
+    }
+
+    this.apSaveModal.innerHTML = `
+      <div class="modal-content ap-save-dialog">
+        <h2>End Turn - Save AP?</h2>
+        <p>You have <strong>${availableAP} AP</strong> remaining.</p>
+        <p>Choose how much to save for next turn (max 10):</p>
+        <div class="ap-save-options">
+          ${options.join('')}
+        </div>
+        <div class="ap-save-quick-actions">
+          <button class="btn btn-secondary" id="ap-save-none">Save Nothing (0 AP)</button>
+          <button class="btn btn-primary" id="ap-save-max">Save Maximum (${maxSave} AP)</button>
+        </div>
+      </div>
+    `;
+
+    this.apSaveModal.style.display = 'flex';
+
+    // Add event listeners
+    const optionBtns = this.apSaveModal.querySelectorAll('.ap-save-option');
+    optionBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ap = parseInt((btn as HTMLElement).dataset.ap || '0', 10);
+        this.hideAPSaveDialog();
+        if (this.apSaveCallback) {
+          this.apSaveCallback(ap);
+        }
+      });
+    });
+
+    document.getElementById('ap-save-none')?.addEventListener('click', () => {
+      this.hideAPSaveDialog();
+      if (this.apSaveCallback) {
+        this.apSaveCallback(0);
+      }
+    });
+
+    document.getElementById('ap-save-max')?.addEventListener('click', () => {
+      this.hideAPSaveDialog();
+      if (this.apSaveCallback) {
+        this.apSaveCallback(maxSave);
+      }
+    });
+  }
+
+  /**
+   * Hide the AP save dialog
+   */
+  hideAPSaveDialog(): void {
+    if (this.apSaveModal) {
+      this.apSaveModal.style.display = 'none';
+    }
+  }
+
   /**
    * Clean up resources
    */
@@ -789,6 +987,10 @@ export class HUD {
     if (this.unitContextPanel) {
       this.unitContextPanel.remove();
       this.unitContextPanel = null;
+    }
+    if (this.apSaveModal) {
+      this.apSaveModal.remove();
+      this.apSaveModal = null;
     }
   }
 }

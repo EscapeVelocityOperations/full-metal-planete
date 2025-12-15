@@ -43,6 +43,10 @@ export interface IHexRenderer {
     type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire'
   ): void;
   clearHighlights?(): void;
+
+  // Unit selection highlighting
+  setUnitSelected?(unitId: string, selected: boolean): void;
+  clearUnitSelections?(): void;
 }
 
 export type RendererType = 'auto' | 'webgpu' | 'css';

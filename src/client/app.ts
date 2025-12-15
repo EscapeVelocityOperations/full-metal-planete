@@ -9,11 +9,12 @@ import { GameClient } from './game-client';
 import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType } from '@/shared/game/types';
-import { hexKey, hexRotateAround } from '@/shared/game/hex';
+import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType, type HexTerrain } from '@/shared/game/types';
+import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainGetter, getOccupiedHexes } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
-import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, getWinners, setLiftOffDecision } from '@/shared/game/state';
+import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, type TerrainGetter } from '@/shared/game/combat';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, setLiftOffDecision } from '@/shared/game/state';
 
 export interface GameConfig {
   gameId: string;
@@ -377,7 +378,7 @@ export class GameApp {
     }));
 
     this.renderer.setTerrainData(terrainHexes);
-    this.renderer.setTide('normal');
+    this.renderer.setTide(TideLevel.Normal);
     this.render();
   }
 
@@ -452,6 +453,7 @@ export class GameApp {
     this.initializeDeploymentInventory();
 
     this.updateGameState(gameState);
+    this.hud.showScoreboard();
     this.hud.showMessage('Game started!', 3000);
   }
 
@@ -553,6 +555,7 @@ export class GameApp {
 
     this.checkMyTurn();
     this.updateLiftOffUI();
+    this.updateScoreboard();
     this.render();
   }
 
@@ -885,6 +888,34 @@ export class GameApp {
   }
 
   /**
+   * Create a terrain getter function from game state
+   */
+  private createTerrainGetter(): TerrainGetter {
+    if (!this.gameState) {
+      return () => 'land' as TerrainType;
+    }
+    const terrainMap = new Map<string, TerrainType>();
+    for (const t of this.gameState.terrain) {
+      terrainMap.set(hexKey(t.coord), t.type);
+    }
+    return (coord: HexCoord) => terrainMap.get(hexKey(coord)) ?? ('sea' as TerrainType);
+  }
+
+  /**
+   * Create a path terrain getter (returns TerrainType directly)
+   */
+  private createPathTerrainGetter(): PathTerrainGetter {
+    if (!this.gameState) {
+      return () => 'land' as TerrainType;
+    }
+    const terrainMap = new Map<string, TerrainType>();
+    for (const t of this.gameState.terrain) {
+      terrainMap.set(hexKey(t.coord), t.type);
+    }
+    return (coord: HexCoord) => terrainMap.get(hexKey(coord)) ?? ('sea' as TerrainType);
+  }
+
+  /**
    * Handle hex right click
    */
   private handleHexRightClick(coord: HexCoord): void {
@@ -901,6 +932,86 @@ export class GameApp {
 
     // Show unit context panel for transporter units
     this.showUnitContextPanel(unit);
+
+    // Visual highlight on the unit
+    if (this.renderer?.setUnitSelected) {
+      this.renderer.clearUnitSelections?.();
+      this.renderer.setUnitSelected(unit.id, true);
+    }
+
+    // Show combat range visualization for combat units
+    this.showCombatRangeVisualization(unit);
+
+    // Show reachable hexes for mobile units
+    this.showReachableHexes(unit);
+  }
+
+  /**
+   * Show combat range visualization for a selected combat unit
+   */
+  private showCombatRangeVisualization(unit: Unit): void {
+    if (!this.gameState || !unit.position || !this.renderer?.setHighlightedHexes) return;
+
+    // Only show for combat units that can fire
+    if (!isCombatUnit(unit) || !canUnitFire(unit)) return;
+
+    const getTerrainAt = this.createTerrainGetter();
+    const fireableHexes = getFireableHexes(unit, getTerrainAt);
+
+    if (fireableHexes.length > 0) {
+      // Show firing range
+      this.renderer.setHighlightedHexes(fireableHexes, 'range');
+
+      // Highlight enemy units within range as potential targets
+      const enemyTargets = this.gameState.units.filter(u => {
+        if (!u.position) return false;
+        if (u.owner === unit.owner) return false;
+        return fireableHexes.some(h => h.q === u.position!.q && h.r === u.position!.r);
+      });
+
+      if (enemyTargets.length > 0) {
+        const targetHexes = enemyTargets.map(u => u.position!);
+        this.renderer.setHighlightedHexes(targetHexes, 'target');
+      }
+    }
+  }
+
+  /**
+   * Show reachable hexes for a mobile unit based on current AP
+   */
+  private showReachableHexes(unit: Unit): void {
+    if (!this.gameState || !unit.position || !this.renderer?.setHighlightedHexes) return;
+
+    // Skip immobile units
+    const movementCost = UNIT_PROPERTIES[unit.type].movementCost;
+    if (!isFinite(movementCost) || unit.isStuck || unit.isNeutralized) return;
+
+    const getTerrainAt = this.createPathTerrainGetter();
+    const occupiedHexes = getOccupiedHexes(this.gameState.units);
+    // Remove the current unit's position from occupied set
+    occupiedHexes.delete(hexKey(unit.position));
+
+    const reachable = getReachableHexes(
+      unit.position,
+      unit.type,
+      this.gameState.actionPoints,
+      getTerrainAt,
+      this.gameState.currentTide || TideLevel.Normal,
+      occupiedHexes
+    );
+
+    // Convert to array of coordinates
+    const reachableCoords: HexCoord[] = [];
+    for (const [key] of reachable) {
+      const [q, r] = key.split(',').map(Number);
+      reachableCoords.push({ q, r });
+    }
+
+    // Only highlight if not a combat unit (to avoid visual clutter with combat range)
+    if (reachableCoords.length > 0 && !isCombatUnit(unit)) {
+      // Green highlight for reachable hexes
+      this.renderer.setHighlightedHexes(reachableCoords, 'selected');
+    }
   }
 
   /**
@@ -912,6 +1023,9 @@ export class GameApp {
       this.selectedUnit = null;
       this.hud.hideUnitActions();
       this.hud.showMessage('Unit deselected', 1000);
+      // Clear visual highlights
+      this.renderer?.clearHighlights?.();
+      this.renderer?.clearUnitSelections?.();
     }
   }
 
@@ -1039,7 +1153,7 @@ export class GameApp {
 
   /**
    * Show movement preview for a destination hex
-   * Highlights the path and shows AP cost
+   * Highlights the path and shows AP cost with proper A* pathfinding
    */
   private showMovementPreview(destination: HexCoord): void {
     if (!this.selectedUnit || !this.gameState) return;
@@ -1067,9 +1181,35 @@ export class GameApp {
       return;
     }
 
-    // Calculate path and cost
+    // Calculate path using A* pathfinding
     const path = this.calculatePath(this.selectedUnit.position!, destination);
-    const apCost = path.length - 1;
+
+    // Check if path is valid (more than just start and end fallback)
+    if (path.length === 2 && path[0] !== path[1]) {
+      // Try to verify if a real path exists
+      const getTerrainAt = this.createPathTerrainGetter();
+      const occupiedHexes = getOccupiedHexes(this.gameState.units);
+      occupiedHexes.delete(hexKey(this.selectedUnit.position!));
+
+      const realPath = findPath(
+        this.selectedUnit.position!,
+        destination,
+        this.selectedUnit.type,
+        getTerrainAt,
+        currentTide,
+        occupiedHexes
+      );
+
+      if (!realPath) {
+        this.hud.showMessage('No valid path to destination', 2000);
+        return;
+      }
+    }
+
+    // Calculate AP cost: (path length - 1) * movement cost per hex
+    const movementCost = UNIT_PROPERTIES[this.selectedUnit.type].movementCost;
+    const stepsCount = path.length - 1;
+    const apCost = stepsCount * movementCost;
 
     // Store preview state
     this.movementPreviewDestination = destination;
@@ -1094,11 +1234,12 @@ export class GameApp {
       this.renderer.setHighlightedHexes([destination], highlightType);
     }
 
-    // Show AP cost message
+    // Show AP cost message with path length info
+    const pathInfo = stepsCount > 1 ? ` (${stepsCount} hexes)` : '';
     if (apCost > this.gameState.actionPoints) {
-      this.hud.showMessage(`Need ${apCost} AP (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+      this.hud.showMessage(`Need ${apCost} AP${pathInfo} (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
     } else {
-      this.hud.showMessage(`Move for ${apCost} AP - Click again to confirm`, 3000);
+      this.hud.showMessage(`Move for ${apCost} AP${pathInfo} - Click again to confirm`, 3000);
     }
   }
 
@@ -1206,10 +1347,28 @@ export class GameApp {
   }
 
   /**
-   * Calculate simple path between two hexes (straight line for MVP)
+   * Calculate path between two hexes using A* pathfinding
    */
   private calculatePath(from: HexCoord, to: HexCoord): HexCoord[] {
-    return [from, to];
+    if (!this.selectedUnit || !this.gameState) {
+      return [from, to]; // Fallback to simple path
+    }
+
+    const getTerrainAt = this.createPathTerrainGetter();
+    const occupiedHexes = getOccupiedHexes(this.gameState.units);
+    // Remove our unit's position from occupied set
+    occupiedHexes.delete(hexKey(from));
+
+    const path = findPath(
+      from,
+      to,
+      this.selectedUnit.type,
+      getTerrainAt,
+      this.gameState.currentTide || TideLevel.Normal,
+      occupiedHexes
+    );
+
+    return path || [from, to]; // Return simple path if no valid A* path found
   }
 
   /**
@@ -1220,7 +1379,7 @@ export class GameApp {
 
     return (
       this.gameState.units.find(
-        (unit) => unit.position.q === coord.q && unit.position.r === coord.r
+        (unit) => unit.position !== null && unit.position.q === coord.q && unit.position.r === coord.r
       ) || null
     );
   }
@@ -1303,14 +1462,33 @@ export class GameApp {
   private handleEndTurn(isTimeout = false): void {
     if (!this.isMyTurn || !this.gameState) return;
 
-    // On timeout, no AP is saved; otherwise save remaining AP (up to 10)
-    const savedAP = isTimeout ? 0 : Math.min(this.gameState.actionPoints, 10);
-    this.client.endTurn(savedAP);
-
-    if (!isTimeout) {
-      this.hud.showMessage('Turn ended', 2000);
+    // On timeout, no AP is saved - end immediately
+    if (isTimeout) {
+      this.client.endTurn(0);
+      this.deselectUnit();
+      return;
     }
-    this.deselectUnit();
+
+    const availableAP = this.gameState.actionPoints;
+
+    // If no AP remaining, end turn immediately without dialog
+    if (availableAP === 0) {
+      this.client.endTurn(0);
+      this.hud.showMessage('Turn ended', 2000);
+      this.deselectUnit();
+      return;
+    }
+
+    // Show AP save dialog
+    this.hud.showAPSaveDialog(availableAP, (savedAP: number) => {
+      this.client.endTurn(savedAP);
+      if (savedAP > 0) {
+        this.hud.showMessage(`Turn ended - Saved ${savedAP} AP`, 2000);
+      } else {
+        this.hud.showMessage('Turn ended', 2000);
+      }
+      this.deselectUnit();
+    });
   }
 
   /**
@@ -1379,8 +1557,41 @@ export class GameApp {
   }
 
   /**
-   * Check if game is over and display results
+   * Update the scoreboard with current player statistics
    */
+  private updateScoreboard(): void {
+    if (!this.gameState) return;
+
+    const currentPlayerId = this.gameState.currentPlayer || '';
+
+    const playerStats = this.gameState.players.map(player => {
+      // Count units owned by this player (excluding astronef itself)
+      const unitCount = this.gameState!.units.filter(
+        u => u.owner === player.id && u.type !== UnitType.Astronef
+      ).length;
+
+      // Count total cargo across all player's transporters
+      const cargoCount = this.gameState!.units
+        .filter(u => u.owner === player.id && u.cargo)
+        .reduce((sum, u) => sum + (u.cargo?.length || 0), 0);
+
+      // Calculate current score (only for lifted-off players, otherwise estimate)
+      const score = calculateScore(this.gameState!, player.id);
+
+      return {
+        id: player.id,
+        name: player.name,
+        color: player.color,
+        unitCount,
+        cargoCount,
+        score,
+        hasLiftedOff: player.hasLiftedOff || false,
+      };
+    });
+
+    this.hud.updateScoreboard(playerStats, currentPlayerId);
+  }
+
   private checkGameOver(): void {
     if (!this.gameState) return;
 

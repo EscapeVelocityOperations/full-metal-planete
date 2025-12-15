@@ -689,6 +689,12 @@ export class CSSHexRenderer {
       }
 
       container.appendChild(marker);
+
+      // Add cargo badge for Astronef if it has cargo
+      if (unit.cargo && unit.cargo.length > 0) {
+        const badge = this.createCargoBadge(unit.cargo.length, footprint[0]);
+        container.appendChild(badge);
+      }
     }
     // Special handling for Barge - sprite spans 2 hexes
     else if (unit.type === UnitType.Barge && footprint.length === 2) {
@@ -720,6 +726,12 @@ export class CSSHexRenderer {
       marker.style.transform = `rotate(${angle}deg)`;
 
       container.appendChild(marker);
+
+      // Add cargo badge for Barge if it has cargo
+      if (unit.cargo && unit.cargo.length > 0) {
+        const badge = this.createCargoBadge(unit.cargo.length, footprint[0]);
+        container.appendChild(badge);
+      }
     }
     // Special handling for Tower - higher z-index to layer over Astronef
     else if (unit.type === UnitType.Tower) {
@@ -776,7 +788,49 @@ export class CSSHexRenderer {
       });
     }
 
+    // Add cargo badge if unit has cargo
+    if (unit.cargo && unit.cargo.length > 0) {
+      const badge = this.createCargoBadge(unit.cargo.length, footprint[0]);
+      container.appendChild(badge);
+    }
+
     return container;
+  }
+
+  /**
+   * Create a cargo badge element showing cargo count
+   */
+  private createCargoBadge(count: number, position: HexCoord): HTMLDivElement {
+    const badge = document.createElement('div');
+    badge.className = 'cargo-badge';
+
+    const pos = axialToPixel(position.q, position.r, HEX_SIZE);
+    const hexWidth = HEX_SIZE * 2;
+
+    // Position badge at top-right of the hex
+    badge.style.cssText = `
+      position: absolute;
+      left: ${pos.x + hexWidth / 4}px;
+      top: ${pos.y - HEX_SIZE * 0.6}px;
+      width: 18px;
+      height: 18px;
+      background: linear-gradient(135deg, #e55a3c, #ff8c4a);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      z-index: 20;
+      pointer-events: none;
+    `;
+    badge.textContent = String(count);
+
+    return badge;
   }
 
   /**

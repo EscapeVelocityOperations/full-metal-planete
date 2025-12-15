@@ -83,6 +83,7 @@ function createGameState(overrides: Partial<GameState> = {}): GameState {
       createPlayer('p1', PlayerColor.Red),
       createPlayer('p2', PlayerColor.Blue),
     ],
+    buildsThisTurn: [],
     liftOffDecisions: { p1: null, p2: null },
     ...overrides,
   };

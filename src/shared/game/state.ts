@@ -28,11 +28,13 @@ import {
   type LandAstronefAction,
   type DeployUnitAction,
   type ValidationResult,
+  type CaptureAstronefAction,
 } from './types';
 import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP } from './actions';
-import { hexKey } from './hex';
+import { hexKey, hexNeighbors, hexEqual } from './hex';
 import { generateMinerals } from './map-generator';
-import { isUnitStuck, isUnitGrounded, getEffectiveTerrain, canAstronefLandOn } from './terrain';
+import { isUnitStuck, isUnitGrounded, getEffectiveTerrain, canAstronefLandOn, canUnitEnterTerrain } from './terrain';
+import { getHexesUnderFire, type TerrainGetter } from './combat';
 
 // ============================================================================
 // Array Utilities
@@ -413,6 +415,7 @@ export function createInitialGameState(
     turnTimeLimit: GAME_CONSTANTS.TURN_TIME_LIMIT_MS,
     actionPoints: 0, // No AP during landing
     savedActionPoints,
+    buildsThisTurn: [], // Track builds per turn
     currentTide: TideLevel.Normal, // Turn 2 is always Normal
     tideDeck,
     tideDiscard,
@@ -560,6 +563,7 @@ export function advanceTurn(state: GameState): GameState {
     actionPoints: newActionPoints,
     turnStartTime: Date.now(),
     units: updatedUnits,
+    buildsThisTurn: [], // Reset builds for new player's turn
   };
 
   if (isNewRound && newTurn >= 3) {
@@ -747,11 +751,15 @@ export function applyBuildAction(state: GameState, action: BuildAction): GameSta
   // Remove mineral from game
   const updatedMinerals = state.minerals.filter((m) => m.id !== mineralId);
 
+  // Track build for this turn
+  const buildsThisTurn = [...(state.buildsThisTurn || []), action.unitType];
+
   return {
     ...state,
     units: updatedUnits,
     minerals: updatedMinerals,
     actionPoints: state.actionPoints - action.apCost,
+    buildsThisTurn,
   };
 }
 
@@ -772,6 +780,257 @@ export function getAstronefHexes(centerHex: HexCoord): HexCoord[] {
     { q: centerHex.q + 1, r: centerHex.r },
     { q: centerHex.q, r: centerHex.r + 1 },
     { q: centerHex.q + 1, r: centerHex.r - 1 },
+  ];
+}
+
+/**
+ * Get the hex position of a pode (turret) for an astronef.
+ * Podes are at indices 1, 2, 3 of the astronef hexes (index 0 is center).
+ */
+export function getPodeHex(astronef: Unit, podeIndex: number): HexCoord | null {
+  if (astronef.position === null) return null;
+  if (podeIndex < 0 || podeIndex > 2) return null;
+
+  const hexes = getAstronefHexes(astronef.position);
+  // Podes are at hexes 1, 2, 3 (not 0, which is center)
+  return hexes[podeIndex + 1] || null;
+}
+
+/**
+ * Get hexes adjacent to a pode that units can exit to.
+ * These are hexes adjacent to the pode that are NOT part of the astronef.
+ */
+export function getPodeExitHexes(astronef: Unit, podeIndex: number): HexCoord[] {
+  const podeHex = getPodeHex(astronef, podeIndex);
+  if (!podeHex || astronef.position === null) return [];
+
+  const astronefHexes = getAstronefHexes(astronef.position);
+  const astronefHexSet = new Set(astronefHexes.map(h => hexKey(h)));
+
+  // Get neighbors of pode hex that are not part of astronef
+  const neighbors = hexNeighbors(podeHex);
+  return neighbors.filter(hex => !astronefHexSet.has(hexKey(hex)));
+}
+
+// ============================================================================
+// Enter/Exit Astronef Actions
+// ============================================================================
+
+/**
+ * Apply an enter astronef action.
+ * Unit moves from map into astronef cargo.
+ */
+export function applyEnterAstronefAction(
+  state: GameState,
+  action: { unitId: string; playerId: string; podeIndex: number }
+): GameState {
+  const unit = state.units.find(u => u.id === action.unitId);
+  if (!unit) return state;
+
+  const astronef = state.units.find(
+    u => u.type === UnitType.Astronef && u.owner === action.playerId
+  );
+  if (!astronef) return state;
+
+  // Add unit to astronef cargo
+  const updatedAstronef = {
+    ...astronef,
+    cargo: [...(astronef.cargo || []), unit.id],
+  };
+
+  // Remove unit from map (set position to null)
+  const updatedUnit = {
+    ...unit,
+    position: null,
+  };
+
+  const updatedUnits = state.units.map(u => {
+    if (u.id === astronef.id) return updatedAstronef;
+    if (u.id === unit.id) return updatedUnit;
+    return u;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+    actionPoints: state.actionPoints - GAME_CONSTANTS.AP_COST_ENTER_ASTRONEF,
+  };
+}
+
+/**
+ * Apply an exit astronef action.
+ * Unit moves from astronef cargo to map at destination hex.
+ */
+export function applyExitAstronefAction(
+  state: GameState,
+  action: { unitId: string; playerId: string; podeIndex: number; destination: HexCoord }
+): GameState {
+  const astronef = state.units.find(
+    u => u.type === UnitType.Astronef && u.owner === action.playerId
+  );
+  if (!astronef) return state;
+
+  // Check unit is in astronef cargo
+  if (!astronef.cargo?.includes(action.unitId)) return state;
+
+  const unit = state.units.find(u => u.id === action.unitId);
+  if (!unit) return state;
+
+  // Remove unit from astronef cargo
+  const updatedAstronef = {
+    ...astronef,
+    cargo: astronef.cargo.filter(id => id !== action.unitId),
+  };
+
+  // Place unit on map at destination
+  const updatedUnit = {
+    ...unit,
+    position: action.destination,
+  };
+
+  const updatedUnits = state.units.map(u => {
+    if (u.id === astronef.id) return updatedAstronef;
+    if (u.id === unit.id) return updatedUnit;
+    return u;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+    actionPoints: state.actionPoints - GAME_CONSTANTS.AP_COST_EXIT_ASTRONEF,
+  };
+}
+
+// ============================================================================
+// Astronef Capture Actions (Section 10.5)
+// ============================================================================
+
+/**
+ * Apply an astronef capture action.
+ *
+ * When an astronef is captured:
+ * 1. The astronef's owner is changed to the captor
+ * 2. The captor's capturedAstronefs list is updated
+ * 3. All of the original owner's units transfer control to the captor
+ *    (but retain their original colors for visual distinction)
+ * 4. The captor gains +5 AP per turn bonus
+ */
+export function applyCaptureAstronefAction(
+  state: GameState,
+  action: CaptureAstronefAction
+): GameState {
+  const targetAstronef = state.units.find((u) => u.id === action.targetAstronefId);
+  if (!targetAstronef) return state;
+
+  const originalOwner = targetAstronef.owner;
+  const captorId = action.playerId;
+
+  // Update astronef ownership
+  let updatedUnits = state.units.map((unit) => {
+    if (unit.id === action.targetAstronefId) {
+      return { ...unit, owner: captorId };
+    }
+    return unit;
+  });
+
+  // Transfer all of the original owner's units to the captor
+  // Units retain their visual identity (color) but change owner
+  updatedUnits = updatedUnits.map((unit) => {
+    if (unit.owner === originalOwner) {
+      return {
+        ...unit,
+        owner: captorId,
+        // Store original owner for color display
+        originalOwner: originalOwner,
+      };
+    }
+    return unit;
+  });
+
+  // Update player's captured astronefs list
+  const updatedPlayers = state.players.map((player) => {
+    if (player.id === captorId) {
+      return {
+        ...player,
+        capturedAstronefs: [...player.capturedAstronefs, originalOwner],
+      };
+    }
+    return player;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+    players: updatedPlayers,
+    actionPoints: state.actionPoints - action.apCost,
+  };
+}
+
+/**
+ * Check if an astronef can be captured (all towers destroyed).
+ */
+export function canAstronefBeCaptured(astronef: Unit): boolean {
+  if (astronef.type !== UnitType.Astronef) return false;
+  if (!astronef.turrets) return false;
+  if (astronef.hasLiftedOff) return false;
+
+  // All 3 towers must be destroyed
+  const destroyedCount = astronef.turrets.filter((t) => t.isDestroyed).length;
+  return destroyedCount >= 3;
+}
+
+/**
+ * Get astronefs that can be captured by a player.
+ * Returns astronefs where all 3 towers are destroyed and player has
+ * an adjacent combat unit.
+ */
+export function getCapturableAstronefs(state: GameState, playerId: string): Unit[] {
+  // Get player's combat units that can perform capture
+  const combatUnits = state.units.filter((u) => {
+    if (u.owner !== playerId) return false;
+    if (!u.position) return false;
+    if (u.isStuck || u.isNeutralized) return false;
+    const props = UNIT_PROPERTIES[u.type];
+    return props.combatRange > 0;
+  });
+
+  if (combatUnits.length === 0) return [];
+
+  // Find enemy astronefs with all towers destroyed
+  const capturableAstronefs = state.units.filter((u) => {
+    if (u.type !== UnitType.Astronef) return false;
+    if (u.owner === playerId) return false;
+    if (!canAstronefBeCaptured(u)) return false;
+    if (!u.position) return false;
+
+    // Check if any combat unit is adjacent to the astronef
+    const astronefHexes = getAstronefHexesForCapture(u);
+
+    return combatUnits.some((combatUnit) => {
+      return astronefHexes.some((astroHex) => {
+        const distance = Math.abs(combatUnit.position!.q - astroHex.q) +
+          Math.abs(combatUnit.position!.r - astroHex.r) +
+          Math.abs((-combatUnit.position!.q - combatUnit.position!.r) - (-astroHex.q - astroHex.r));
+        return distance / 2 === 1; // Adjacent in cube coordinates
+      });
+    });
+  });
+
+  return capturableAstronefs;
+}
+
+/**
+ * Get the hexes occupied by an astronef for capture adjacency check.
+ */
+function getAstronefHexesForCapture(astronef: Unit): HexCoord[] {
+  if (!astronef.position) return [];
+
+  const center = astronef.position;
+  return [
+    center,
+    { q: center.q + 1, r: center.r },     // East
+    { q: center.q, r: center.r + 1 },     // Southeast
+    { q: center.q + 1, r: center.r - 1 }, // Northeast
   ];
 }
 
@@ -1067,6 +1326,181 @@ export function getUndeployedUnits(state: GameState, playerId: string): Unit[] {
     if (unit.type === UnitType.Astronef || unit.type === UnitType.Tower) return false;
     return unit.position.q === 0 && unit.position.r === 0;
   });
+}
+
+// ============================================================================
+// Retreat and Neutralization (Section 6.5)
+// ============================================================================
+
+/**
+ * Get all units of a player that are currently under enemy fire.
+ */
+export function getUnitsUnderFire(state: GameState, playerId: string): Unit[] {
+  const terrainGetter: TerrainGetter = (coord) => getTerrainAt(state, coord);
+  const underFireHexes = getHexesUnderFire(state.units, playerId, terrainGetter);
+
+  return state.units.filter((unit) => {
+    if (unit.owner !== playerId) return false;
+    if (unit.position === null) return false;
+    return underFireHexes.has(hexKey(unit.position));
+  });
+}
+
+/**
+ * Get valid retreat hexes for a unit under fire.
+ * A retreat hex must be:
+ * - Adjacent to current position (1 hex away)
+ * - Not under enemy fire
+ * - Valid terrain for the unit type
+ * - Not occupied by another unit
+ */
+export function getRetreatHexes(state: GameState, unit: Unit): HexCoord[] {
+  if (unit.position === null) return [];
+
+  const playerId = unit.owner;
+  const terrainGetter: TerrainGetter = (coord) => getTerrainAt(state, coord);
+  const underFireHexes = getHexesUnderFire(state.units, playerId, terrainGetter);
+  const tide = state.currentTide;
+
+  // Get all adjacent hexes
+  const neighbors = hexNeighbors(unit.position);
+
+  // Filter to valid retreat destinations
+  return neighbors.filter((hex) => {
+    // Cannot retreat to hex under fire
+    if (underFireHexes.has(hexKey(hex))) return false;
+
+    // Check terrain is valid for unit
+    const terrain = getTerrainAt(state, hex);
+    if (!canUnitEnterTerrain(unit.type, terrain, tide)) return false;
+
+    // Check hex is not occupied
+    const occupant = state.units.find(
+      (u) => u.position !== null && hexEqual(u.position, hex)
+    );
+    if (occupant) return false;
+
+    return true;
+  });
+}
+
+/**
+ * Apply a retreat move for a unit.
+ * Returns updated game state.
+ */
+export function applyRetreat(state: GameState, unitId: string, targetHex: HexCoord): GameState {
+  const unit = state.units.find((u) => u.id === unitId);
+  if (!unit || unit.position === null) return state;
+
+  // Verify target is a valid retreat hex
+  const validRetreatHexes = getRetreatHexes(state, unit);
+  const isValidTarget = validRetreatHexes.some((hex) => hexEqual(hex, targetHex));
+  if (!isValidTarget) return state;
+
+  // Move unit to retreat hex
+  const updatedUnits = state.units.map((u) =>
+    u.id === unitId ? { ...u, position: targetHex } : u
+  );
+
+  return {
+    ...state,
+    units: updatedUnits,
+  };
+}
+
+/**
+ * Process the retreat phase at the start of a player's turn.
+ * Units under fire can either retreat or become neutralized.
+ *
+ * @param state Current game state
+ * @param playerId Player whose turn is starting
+ * @param retreatChoices Map of unitId -> targetHex for units that choose to retreat
+ * @returns Updated game state with retreats applied and neutralizations set
+ */
+export function processRetreatPhase(
+  state: GameState,
+  playerId: string,
+  retreatChoices: Map<string, HexCoord>
+): GameState {
+  const unitsUnderFire = getUnitsUnderFire(state, playerId);
+
+  let updatedState = { ...state };
+  let updatedUnits = [...state.units];
+
+  for (const unit of unitsUnderFire) {
+    // Skip already neutralized units
+    if (unit.isNeutralized) continue;
+
+    // Check if player chose to retreat this unit
+    const retreatTarget = retreatChoices.get(unit.id);
+
+    if (retreatTarget) {
+      // Apply retreat
+      const validRetreatHexes = getRetreatHexes(updatedState, unit);
+      const isValid = validRetreatHexes.some((hex) => hexEqual(hex, retreatTarget));
+
+      if (isValid) {
+        updatedUnits = updatedUnits.map((u) =>
+          u.id === unit.id ? { ...u, position: retreatTarget } : u
+        );
+        updatedState = { ...updatedState, units: updatedUnits };
+      } else {
+        // Invalid retreat choice - neutralize unit
+        updatedUnits = updatedUnits.map((u) =>
+          u.id === unit.id ? { ...u, isNeutralized: true } : u
+        );
+      }
+    } else {
+      // No retreat chosen - check if retreat is possible
+      const validRetreatHexes = getRetreatHexes(updatedState, unit);
+
+      if (validRetreatHexes.length === 0) {
+        // No escape possible - unit is neutralized
+        updatedUnits = updatedUnits.map((u) =>
+          u.id === unit.id ? { ...u, isNeutralized: true } : u
+        );
+      }
+      // If retreat hexes exist but player chose not to retreat,
+      // the unit is also neutralized (they had the chance to escape but didn't)
+      else {
+        updatedUnits = updatedUnits.map((u) =>
+          u.id === unit.id ? { ...u, isNeutralized: true } : u
+        );
+      }
+    }
+  }
+
+  return {
+    ...updatedState,
+    units: updatedUnits,
+  };
+}
+
+/**
+ * Clear neutralization for units that are no longer under fire.
+ * This should be called when combat units move to rescue neutralized allies.
+ */
+export function updateNeutralizationStatus(state: GameState): GameState {
+  const updatedUnits = state.units.map((unit) => {
+    if (!unit.isNeutralized) return unit;
+    if (unit.position === null) return unit;
+
+    // Check if this unit is still under fire
+    const terrainGetter: TerrainGetter = (coord) => getTerrainAt(state, coord);
+    const underFireHexes = getHexesUnderFire(state.units, unit.owner, terrainGetter);
+
+    if (!underFireHexes.has(hexKey(unit.position))) {
+      // No longer under fire - remove neutralization
+      return { ...unit, isNeutralized: false };
+    }
+
+    return unit;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+  };
 }
 
 // ============================================================================

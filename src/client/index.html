@@ -588,6 +588,104 @@
         color: #fff;
       }
 
+      /* Scoreboard Panel */
+      #scoreboard-panel {
+        position: absolute;
+        top: 80px;
+        left: 250px;
+        background: rgba(0, 0, 0, 0.9);
+        border: 2px solid #666;
+        border-radius: 12px;
+        min-width: 300px;
+        z-index: 16;
+      }
+
+      #scoreboard-panel.hidden {
+        display: none;
+      }
+
+      .scoreboard-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 16px;
+        background: rgba(74, 144, 226, 0.2);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px 10px 0 0;
+      }
+
+      .scoreboard-title {
+        font-size: 12px;
+        font-weight: bold;
+        color: #4a90e2;
+        letter-spacing: 1px;
+      }
+
+      .scoreboard-toggle {
+        background: none;
+        border: none;
+        color: #888;
+        cursor: pointer;
+        font-size: 12px;
+        padding: 4px;
+      }
+
+      .scoreboard-toggle:hover {
+        color: #fff;
+      }
+
+      .scoreboard-content {
+        padding: 12px;
+      }
+
+      .scoreboard-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .scoreboard-table th {
+        text-align: left;
+        color: #888;
+        font-size: 11px;
+        font-weight: normal;
+        padding: 4px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .scoreboard-table td {
+        padding: 8px;
+        color: #ccc;
+      }
+
+      .scoreboard-table tr.current-player td {
+        color: #fff;
+        background: rgba(74, 144, 226, 0.2);
+      }
+
+      .scoreboard-table .player-name {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .scoreboard-table .player-color-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .scoreboard-table .player-color-dot.red { background: #ff4444; }
+      .scoreboard-table .player-color-dot.blue { background: #4444ff; }
+      .scoreboard-table .player-color-dot.green { background: #44ff44; }
+      .scoreboard-table .player-color-dot.yellow { background: #ffff44; }
+
+      .scoreboard-table .lifted-off {
+        font-size: 10px;
+        color: #44aa44;
+        margin-left: 4px;
+      }
+
       /* Unit Context Panel (Mineral Pickup/Drop) */
       .unit-context-panel {
         position: absolute;
@@ -810,6 +908,44 @@
         margin-left: 10px;
       }
 
+      /* AP Save Dialog */
+      .ap-save-dialog {
+        max-width: 400px;
+      }
+
+      .ap-save-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: center;
+        margin: 20px 0;
+      }
+
+      .ap-save-option {
+        padding: 8px 16px;
+        background: #2a2a4a;
+        border: 1px solid #4a90e2;
+        border-radius: 6px;
+        color: #fff;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 14px;
+      }
+
+      .ap-save-option:hover {
+        background: #4a90e2;
+        transform: translateY(-2px);
+      }
+
+      .ap-save-quick-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid #333;
+      }
+
       .btn-liftoff:hover:not(:disabled) {
         background: linear-gradient(135deg, #ff5577 0%, #e94560 100%);
         transform: translateY(-2px);
@@ -953,6 +1089,29 @@
         </div>
         <div class="instructions-content" id="instructions-content">
           Click on the map to position your Astronef. Choose 4 adjacent hexes on land or marsh terrain.
+        </div>
+      </div>
+
+      <!-- Scoreboard Panel -->
+      <div id="scoreboard-panel" class="hidden">
+        <div class="scoreboard-header">
+          <span class="scoreboard-title">SCOREBOARD</span>
+          <button id="scoreboard-toggle" class="scoreboard-toggle">▼</button>
+        </div>
+        <div class="scoreboard-content" id="scoreboard-content">
+          <table class="scoreboard-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Units</th>
+                <th>Cargo</th>
+                <th title="Score (after liftoff)">Score</th>
+              </tr>
+            </thead>
+            <tbody id="scoreboard-body">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
         </div>
       </div>
 

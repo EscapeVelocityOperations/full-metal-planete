@@ -209,6 +209,9 @@ export interface Unit {
   owner: PlayerId;
   position: HexCoord | null; // null when unit is in inventory/not placed
 
+  // Original owner (for captured units - used for visual color display)
+  originalOwner?: PlayerId;
+
   // Rotation for multi-hex units (0-5, each step is 60 degrees clockwise)
   rotation?: number;
 
@@ -291,6 +294,9 @@ export interface GameState {
   // Action points
   actionPoints: number; // Current player's remaining AP
   savedActionPoints: Record<PlayerId, number>; // 0-10 per player
+
+  // Build tracking (per turn)
+  buildsThisTurn: UnitType[]; // Unit types built this turn (max 2, no duplicate special types)
 
   // Tide
   currentTide: TideLevel;
@@ -411,6 +417,19 @@ export interface RebuildTowerAction extends BaseAction {
   apCost: number; // Always 2
 }
 
+export interface RetreatAction extends BaseAction {
+  type: 'RETREAT';
+  unitId: UnitId;
+  destination: HexCoord;
+}
+
+export interface CaptureAstronefAction extends BaseAction {
+  type: 'CAPTURE_ASTRONEF';
+  combatUnitId: UnitId; // The combat unit entering the astronef
+  targetAstronefId: UnitId; // The astronef being captured
+  apCost: number; // Cost to move onto astronef hex (movement cost)
+}
+
 export type GameAction =
   | MoveAction
   | LoadAction
@@ -424,7 +443,9 @@ export type GameAction =
   | LandAstronefAction
   | DeployUnitAction
   | EndTurnAction
-  | RebuildTowerAction;
+  | RebuildTowerAction
+  | RetreatAction
+  | CaptureAstronefAction;
 
 // ============================================================================
 // 10. Game Constants
@@ -591,6 +612,7 @@ export type EffectiveTerrainType = 'land' | 'sea';
 export interface ValidationResult {
   valid: boolean;
   error?: string;
+  apCost?: number;
 }
 
 // ============================================================================

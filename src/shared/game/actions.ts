@@ -11,13 +11,16 @@ import {
   GamePhase,
   UNIT_PROPERTIES,
   GAME_CONSTANTS,
+  UNIT_SHAPES,
   type HexCoord,
   type GameState,
   type Unit,
   type ValidationResult,
   type HexTerrain,
+  type RetreatAction,
+  type CaptureAstronefAction,
 } from './types';
-import { hexDistance, hexKey, hexNeighbors } from './hex';
+import { hexDistance, hexKey, hexNeighbors, getUnitFootprint, getOccupiedHexes } from './hex';
 import { canUnitEnterTerrain, getEffectiveTerrain } from './terrain';
 import { getHexesUnderFire, canDestroyTarget, canCaptureTarget, type TerrainGetter } from './combat';
 
@@ -221,6 +224,11 @@ export function validateMoveAction(
     }
   }
 
+  // Get unit shape info for multi-hex units (Barges)
+  const unitShape = UNIT_SHAPES[unit.type];
+  const isMultiHexUnit = unitShape && unitShape.hexCount > 1;
+  const unitRotation = unit.rotation || 0;
+
   // Validate each step of the path
   for (let i = 1; i < path.length; i++) {
     const from = path[i - 1];
@@ -231,20 +239,47 @@ export function validateMoveAction(
       return { valid: false, error: `Path segments must be adjacent (step ${i})` };
     }
 
-    // Check terrain is valid for unit
-    const terrain = getTerrainAt(to);
-    if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
-      return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
-    }
+    // For multi-hex units, validate ALL hexes in the footprint
+    if (isMultiHexUnit) {
+      const footprint = getUnitFootprint(unit.type, to, unitRotation);
+      for (const footprintHex of footprint) {
+        // Check terrain is valid for each hex in footprint
+        const terrain = getTerrainAt(footprintHex);
+        if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
+          return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+        }
 
-    // Check not occupied (only final hex matters for most cases, but check path)
-    if (i === path.length - 1 && isHexOccupied(state, to, unitId)) {
-      return { valid: false, error: 'Destination hex is occupied' };
-    }
+        // Check not under enemy fire for any hex in footprint
+        if (allUnderFire.has(hexKey(footprintHex))) {
+          return { valid: false, error: `Cannot move into hex under fire at step ${i}` };
+        }
+      }
 
-    // Check not under enemy fire
-    if (allUnderFire.has(hexKey(to))) {
-      return { valid: false, error: `Cannot move into hex under fire at step ${i}` };
+      // Check for collisions with other units at final destination
+      if (i === path.length - 1) {
+        const occupiedHexes = getOccupiedHexes(state.units.filter((u) => u.id !== unitId));
+        for (const footprintHex of footprint) {
+          if (occupiedHexes.has(hexKey(footprintHex))) {
+            return { valid: false, error: 'Destination hexes are occupied' };
+          }
+        }
+      }
+    } else {
+      // Single-hex unit validation (original logic)
+      const terrain = getTerrainAt(to);
+      if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
+        return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+      }
+
+      // Check not occupied (only final hex matters for single-hex units)
+      if (i === path.length - 1 && isHexOccupied(state, to, unitId)) {
+        return { valid: false, error: 'Destination hex is occupied' };
+      }
+
+      // Check not under enemy fire
+      if (allUnderFire.has(hexKey(to))) {
+        return { valid: false, error: `Cannot move into hex under fire at step ${i}` };
+      }
     }
   }
 
@@ -591,6 +626,18 @@ export function validateBuildAction(
     return { valid: false, error: `Cannot build ${unitType}` };
   }
 
+  // Check max builds per turn (max 2)
+  const buildsThisTurn = state.buildsThisTurn || [];
+  if (buildsThisTurn.length >= 2) {
+    return { valid: false, error: 'Maximum 2 units can be built per turn' };
+  }
+
+  // Check special unit restrictions (cannot build 2 of same special type per turn)
+  const specialTypes = [UnitType.Crab, UnitType.Bridge];
+  if (specialTypes.includes(unitType) && buildsThisTurn.includes(unitType)) {
+    return { valid: false, error: `Cannot build two ${unitType}s in the same turn` };
+  }
+
   return { valid: true, apCost: GAME_CONSTANTS.AP_COST_BUILD };
 }
 
@@ -690,4 +737,234 @@ export function validateExitAstronefAction(
   }
 
   return { valid: true, apCost: GAME_CONSTANTS.AP_COST_EXIT_ASTRONEF };
+}
+
+// ============================================================================
+// Retreat Action Validation (Section 6.5)
+// ============================================================================
+
+/**
+ * Validate a retreat action.
+ * Retreat is a special action that happens at the start of a player's turn
+ * for units that are under fire. It costs 0 AP but must be done before any
+ * other actions.
+ *
+ * Rules:
+ * - Unit must be under enemy fire at start of turn
+ * - Destination must be adjacent (1 hex away)
+ * - Destination must not be under enemy fire
+ * - Destination must be valid terrain for unit type
+ * - Destination must be unoccupied
+ */
+export function validateRetreatAction(
+  state: GameState,
+  action: RetreatAction
+): ValidationResult {
+  // Find the unit
+  const unit = state.units.find((u) => u.id === action.unitId);
+  if (!unit) {
+    return { valid: false, error: 'Unit not found' };
+  }
+
+  // Check unit belongs to the player
+  if (unit.owner !== action.playerId) {
+    return { valid: false, error: 'Unit does not belong to player' };
+  }
+
+  // Check unit has a position
+  if (unit.position === null) {
+    return { valid: false, error: 'Unit has no position' };
+  }
+
+  // Create terrain getter
+  const getTerrainAt: TerrainGetter = (coord: HexCoord) => {
+    const hex = state.terrain.find((t) => t.coord.q === coord.q && t.coord.r === coord.r);
+    return hex?.type ?? TerrainType.Sea;
+  };
+
+  // Check unit is under fire from at least one enemy
+  const enemyPlayers = state.players
+    .filter((p) => p.id !== action.playerId)
+    .map((p) => p.id);
+
+  let isUnderFire = false;
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
+    if (underFire.has(hexKey(unit.position))) {
+      isUnderFire = true;
+      break;
+    }
+  }
+
+  if (!isUnderFire) {
+    return { valid: false, error: 'Unit is not under fire and cannot retreat' };
+  }
+
+  // Check destination is adjacent
+  const distance = hexDistance(unit.position, action.destination);
+  if (distance !== 1) {
+    return { valid: false, error: 'Retreat must be to adjacent hex' };
+  }
+
+  // Check destination is not under fire
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
+    if (underFire.has(hexKey(action.destination))) {
+      return { valid: false, error: 'Cannot retreat to hex under fire' };
+    }
+  }
+
+  // Check terrain is valid
+  const destTerrain = getTerrainAt(action.destination);
+  if (!canUnitEnterTerrain(unit.type, destTerrain, state.currentTide)) {
+    return { valid: false, error: 'Cannot retreat to invalid terrain' };
+  }
+
+  // Check destination is unoccupied
+  const occupant = state.units.find(
+    (u) => u.position !== null &&
+      u.position.q === action.destination.q &&
+      u.position.r === action.destination.r
+  );
+  if (occupant) {
+    return { valid: false, error: 'Cannot retreat to occupied hex' };
+  }
+
+  // Retreat costs 0 AP
+  return { valid: true, apCost: 0 };
+}
+
+// ============================================================================
+// Astronef Capture Validation (Section 10.5)
+// ============================================================================
+
+/**
+ * Validate an astronef capture action.
+ *
+ * Rules for capturing an enemy astronef:
+ * 1. All 3 towers of the target astronef must be destroyed
+ * 2. A hostile combat unit must move onto one of the astronef's hexes
+ * 3. The capturing unit must not be stuck or neutralized
+ * 4. The capturing unit must be adjacent to the astronef
+ * 5. Cannot capture own astronef
+ *
+ * Effects of capture:
+ * - Captor gains +5 AP per turn bonus
+ * - All of the captured player's units retain their original color
+ * - Captor now controls a mixed-color force
+ */
+export function validateCaptureAstronefAction(
+  state: GameState,
+  action: CaptureAstronefAction
+): ValidationResult {
+  // Find the combat unit
+  const combatUnit = state.units.find((u) => u.id === action.combatUnitId);
+  if (!combatUnit) {
+    return { valid: false, error: 'Combat unit not found' };
+  }
+
+  // Check combat unit belongs to current player
+  if (combatUnit.owner !== state.currentPlayer) {
+    return { valid: false, error: 'Cannot use enemy unit for capture' };
+  }
+
+  // Check combat unit has combat capability
+  const combatProps = UNIT_PROPERTIES[combatUnit.type];
+  if (combatProps.combatRange === 0) {
+    return { valid: false, error: 'Only combat units can capture astronefs' };
+  }
+
+  // Check combat unit is not stuck or neutralized
+  if (combatUnit.isStuck) {
+    return { valid: false, error: 'Unit is stuck and cannot capture' };
+  }
+  if (combatUnit.isNeutralized) {
+    return { valid: false, error: 'Unit is neutralized and cannot capture' };
+  }
+
+  // Find the target astronef
+  const targetAstronef = state.units.find((u) => u.id === action.targetAstronefId);
+  if (!targetAstronef) {
+    return { valid: false, error: 'Target astronef not found' };
+  }
+
+  // Check target is actually an astronef
+  if (targetAstronef.type !== UnitType.Astronef) {
+    return { valid: false, error: 'Target is not an astronef' };
+  }
+
+  // Check astronef is enemy
+  if (targetAstronef.owner === state.currentPlayer) {
+    return { valid: false, error: 'Cannot capture your own astronef' };
+  }
+
+  // Check astronef has not lifted off
+  if (targetAstronef.hasLiftedOff || targetAstronef.position === null) {
+    return { valid: false, error: 'Target astronef has already lifted off' };
+  }
+
+  // Check all 3 towers are destroyed
+  if (!targetAstronef.turrets) {
+    return { valid: false, error: 'Astronef has no turret data' };
+  }
+
+  const destroyedTurrets = targetAstronef.turrets.filter((t) => t.isDestroyed).length;
+  if (destroyedTurrets < 3) {
+    return {
+      valid: false,
+      error: `All 3 towers must be destroyed to capture (${destroyedTurrets}/3 destroyed)`,
+    };
+  }
+
+  // Check combat unit is adjacent to the astronef
+  // Astronef occupies 4 hexes, combat unit must be adjacent to any of them
+  const astronefHexes = getAstronefOccupiedHexes(targetAstronef);
+  if (!combatUnit.position) {
+    return { valid: false, error: 'Combat unit has no position' };
+  }
+
+  const isAdjacent = astronefHexes.some(
+    (astroHex) => hexDistance(combatUnit.position!, astroHex) === 1
+  );
+
+  if (!isAdjacent) {
+    return { valid: false, error: 'Combat unit must be adjacent to astronef to capture' };
+  }
+
+  // Check sufficient AP (uses standard movement cost)
+  const movementCost = combatProps.movementCost;
+  if (state.actionPoints < movementCost) {
+    return { valid: false, error: `Insufficient action points (need ${movementCost})` };
+  }
+
+  // Check combat unit is not under enemy fire
+  const getTerrainAt = createTerrainGetter(state.terrain);
+  const enemyPlayers = state.players
+    .filter((p) => p.id !== state.currentPlayer)
+    .map((p) => p.id);
+
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
+    if (underFire.has(hexKey(combatUnit.position!))) {
+      return { valid: false, error: 'Cannot capture while under fire' };
+    }
+  }
+
+  return { valid: true, apCost: movementCost };
+}
+
+/**
+ * Get all hexes occupied by an astronef.
+ * Astronef occupies 4 hexes in a Y-shape pattern.
+ */
+function getAstronefOccupiedHexes(astronef: Unit): HexCoord[] {
+  if (!astronef.position) return [];
+
+  const center = astronef.position;
+  return [
+    center,
+    { q: center.q + 1, r: center.r },     // East
+    { q: center.q, r: center.r + 1 },     // Southeast
+    { q: center.q + 1, r: center.r - 1 }, // Northeast
+  ];
 }

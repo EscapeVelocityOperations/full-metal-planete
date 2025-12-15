@@ -160,6 +160,7 @@ export class LabMode {
       tideDiscard: [],
       actionPoints: 15,
       savedActionPoints: { [team1Id]: 0, [team2Id]: 0 },
+      buildsThisTurn: [],
       turnStartTime: Date.now(),
       turnTimeLimit: 300000,
       liftOffDecisions: {},

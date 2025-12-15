@@ -204,6 +204,7 @@ describe('Room', () => {
         minerals: [],
         bridges: [],
         players: sharedPlayers,
+        buildsThisTurn: [],
         liftOffDecisions: {},
       };
 
@@ -258,6 +259,7 @@ describe('Room', () => {
         minerals: [],
         bridges: [],
         players: sharedPlayers2,
+        buildsThisTurn: [],
         liftOffDecisions: {},
       };
 
@@ -308,6 +310,7 @@ describe('Room', () => {
         minerals: [],
         bridges: [],
         players: sharedPlayers3,
+        buildsThisTurn: [],
         liftOffDecisions: {},
       };
 
@@ -374,6 +377,7 @@ describe('Room', () => {
         minerals: [],
         bridges: [],
         players: sharedPlayers4,
+        buildsThisTurn: [],
         liftOffDecisions: {},
       };
 

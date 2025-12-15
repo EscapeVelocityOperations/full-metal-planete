@@ -104,6 +104,7 @@ describe('RedisManager', () => {
       minerals: [],
       bridges: [],
       players: [],
+      buildsThisTurn: [],
       liftOffDecisions: { 'p1-xyz': null, 'p2-abc': null },
     };
 
@@ -280,6 +281,7 @@ describe('RedisManager', () => {
         minerals: [],
         bridges: [],
         players: [],
+        buildsThisTurn: [],
         liftOffDecisions: {},
       };
 
