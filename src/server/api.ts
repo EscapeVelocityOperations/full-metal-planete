@@ -8,8 +8,8 @@ import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameSta
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
-// Client URL for game links (Vite dev server or production URL)
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+// Client URL for game links (same as Vite dev server in dev, production URL in prod)
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:10000';
 
 export function createServer() {
   const fastify = Fastify({ logger: true });
