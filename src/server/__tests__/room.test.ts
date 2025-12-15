@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Room } from '../room.js';
-import type { Player, GameState } from '../types.js';
+import type { Player } from '../types.js';
+import { GamePhase, TideLevel, PlayerColor, type Player as SharedPlayer, type GameState } from '../../shared/game/types.js';
 
 describe('Room', () => {
   let room: Room;
@@ -178,23 +179,31 @@ describe('Room', () => {
       room.setPlayerReady('p2-abc', true);
       room.checkReadyState();
 
+      const sharedPlayers: SharedPlayer[] = room.players.map(p => ({
+        ...p,
+        color: p.color as unknown as PlayerColor,
+        astronefPosition: [],
+        hasLiftedOff: false,
+        capturedAstronefs: [],
+      }));
       const gameState: GameState = {
         gameId: 'abc123',
         turn: 1,
-        phase: 'landing',
+        phase: GamePhase.Landing,
         currentPlayer: 'p1-xyz',
         turnOrder: ['p1-xyz', 'p2-abc'],
         turnStartTime: Date.now(),
         turnTimeLimit: 180000,
         actionPoints: 0,
         savedActionPoints: {},
-        currentTide: 'normal',
+        currentTide: TideLevel.Normal,
         tideDeck: [],
         tideDiscard: [],
+        terrain: [],
         units: [],
         minerals: [],
         bridges: [],
-        players: room.players,
+        players: sharedPlayers,
         liftOffDecisions: {},
       };
 
@@ -224,23 +233,31 @@ describe('Room', () => {
       room.setPlayerReady('p2-abc', true);
       room.checkReadyState();
 
+      const sharedPlayers2: SharedPlayer[] = room.players.map(p => ({
+        ...p,
+        color: p.color as unknown as PlayerColor,
+        astronefPosition: [],
+        hasLiftedOff: false,
+        capturedAstronefs: [],
+      }));
       const gameState: GameState = {
         gameId: 'abc123',
         turn: 1,
-        phase: 'landing',
+        phase: GamePhase.Landing,
         currentPlayer: 'p1-xyz',
         turnOrder: ['p1-xyz', 'p2-abc'],
         turnStartTime: Date.now(),
         turnTimeLimit: 180000,
         actionPoints: 0,
         savedActionPoints: {},
-        currentTide: 'normal',
+        currentTide: TideLevel.Normal,
         tideDeck: [],
         tideDiscard: [],
+        terrain: [],
         units: [],
         minerals: [],
         bridges: [],
-        players: room.players,
+        players: sharedPlayers2,
         liftOffDecisions: {},
       };
 
@@ -266,23 +283,31 @@ describe('Room', () => {
       room.setPlayerReady('p2-abc', true);
       room.checkReadyState();
 
+      const sharedPlayers3: SharedPlayer[] = room.players.map(p => ({
+        ...p,
+        color: p.color as unknown as PlayerColor,
+        astronefPosition: [],
+        hasLiftedOff: false,
+        capturedAstronefs: [],
+      }));
       const gameState: GameState = {
         gameId: 'abc123',
         turn: 1,
-        phase: 'landing',
+        phase: GamePhase.Landing,
         currentPlayer: 'p1-xyz',
         turnOrder: ['p1-xyz', 'p2-abc'],
         turnStartTime: Date.now(),
         turnTimeLimit: 180000,
         actionPoints: 0,
         savedActionPoints: {},
-        currentTide: 'normal',
+        currentTide: TideLevel.Normal,
         tideDeck: [],
         tideDiscard: [],
+        terrain: [],
         units: [],
         minerals: [],
         bridges: [],
-        players: room.players,
+        players: sharedPlayers3,
         liftOffDecisions: {},
       };
 
@@ -324,23 +349,31 @@ describe('Room', () => {
       room.setPlayerReady('p2-abc', true);
       room.checkReadyState();
 
+      const sharedPlayers4: SharedPlayer[] = room.players.map(p => ({
+        ...p,
+        color: p.color as unknown as PlayerColor,
+        astronefPosition: [],
+        hasLiftedOff: false,
+        capturedAstronefs: [],
+      }));
       const gameState: GameState = {
         gameId: 'abc123',
         turn: 1,
-        phase: 'landing',
+        phase: GamePhase.Landing,
         currentPlayer: 'p1-xyz',
         turnOrder: ['p1-xyz', 'p2-abc'],
         turnStartTime: Date.now(),
         turnTimeLimit: 180000,
         actionPoints: 0,
         savedActionPoints: {},
-        currentTide: 'normal',
+        currentTide: TideLevel.Normal,
         tideDeck: [],
         tideDiscard: [],
+        terrain: [],
         units: [],
         minerals: [],
         bridges: [],
-        players: room.players,
+        players: sharedPlayers4,
         liftOffDecisions: {},
       };
 

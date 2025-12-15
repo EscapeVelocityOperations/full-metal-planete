@@ -1,12 +1,12 @@
 // Vitest global setup
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 
 // Mock WebGPU API for testing
 globalThis.navigator = globalThis.navigator || ({} as Navigator);
-(globalThis.navigator as Navigator & { gpu?: unknown }).gpu = undefined;
+Object.defineProperty(globalThis.navigator, 'gpu', { value: undefined, writable: true });
 
 // Mock WebGPU globals
-globalThis.GPUBufferUsage = {
+(globalThis as unknown as { GPUBufferUsage: Record<string, number> }).GPUBufferUsage = {
   MAP_READ: 0x0001,
   MAP_WRITE: 0x0002,
   COPY_SRC: 0x0004,
@@ -17,7 +17,7 @@ globalThis.GPUBufferUsage = {
   STORAGE: 0x0080,
   INDIRECT: 0x0100,
   QUERY_RESOLVE: 0x0200,
-} as GPUBufferUsageFlags;
+};
 
 // Helper to create mock WebGPU adapter
 export function createMockGPUAdapter(): GPUAdapter {

@@ -14,9 +14,10 @@ import {
   TerrainType,
   TERRAIN_COLORS,
 } from '../types';
-import type { Unit, PlayerColor } from '@/shared/game/types';
+import type { Unit, PlayerColor, Mineral, HexCoord } from '@/shared/game/types';
 import { UnitType, PlayerColor as PlayerColorEnum, UNIT_SHAPES } from '@/shared/game/types';
 import { getUnitFootprint } from '@/shared/game/hex';
+import { canCollectMineral } from '@/shared/game/terrain';
 
 // Zoom configuration
 const MIN_ZOOM = 0.3;
@@ -104,10 +105,14 @@ export class CSSHexRenderer {
   private container: HTMLDivElement;
   private gridContainer: HTMLDivElement;
   private unitsContainer: HTMLDivElement;
+  private mineralsContainer: HTMLDivElement;
   private terrainHexes: TerrainHex[] = [];
   private hexElements: Map<string, HTMLDivElement> = new Map();
   private units: Unit[] = [];
   private unitElements: Map<string, HTMLDivElement> = new Map();
+  private minerals: Mineral[] = [];
+  private mineralElements: Map<string, HTMLDivElement> = new Map();
+  private playerColors: Record<string, string> = {};
   private currentTide: TideLevel = TideLevel.Normal;
   private viewport: Viewport;
   private mapBounds: { minX: number; minY: number; maxX: number; maxY: number } = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
@@ -137,7 +142,20 @@ export class CSSHexRenderer {
       will-change: transform;
     `;
 
-    // Create units container (sits on top of hex grid)
+    // Create minerals container (sits between terrain and units)
+    this.mineralsContainer = document.createElement('div');
+    this.mineralsContainer.className = 'minerals-layer';
+    this.mineralsContainer.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    `;
+    this.gridContainer.appendChild(this.mineralsContainer);
+
+    // Create units container (sits on top of hex grid and minerals)
     this.unitsContainer = document.createElement('div');
     this.unitsContainer.className = 'units-layer';
     this.unitsContainer.style.cssText = `
@@ -283,6 +301,116 @@ export class CSSHexRenderer {
         background-repeat: no-repeat;
         background-position: center;
       }
+
+      /* Hex highlight styles for combat/movement */
+      .hex-cell.highlight-range {
+        box-shadow: inset 0 0 0 3px rgba(74, 144, 226, 0.7);
+      }
+
+      .hex-cell.highlight-range::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(74, 144, 226, 0.2);
+        pointer-events: none;
+      }
+
+      .hex-cell.highlight-target {
+        box-shadow: inset 0 0 0 4px rgba(255, 100, 100, 0.9);
+        animation: pulse-target 0.8s ease-in-out infinite;
+      }
+
+      .hex-cell.highlight-target::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 100, 100, 0.3);
+        pointer-events: none;
+      }
+
+      .hex-cell.highlight-selected {
+        box-shadow: inset 0 0 0 4px rgba(100, 255, 100, 0.9);
+      }
+
+      .hex-cell.highlight-selected::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(100, 255, 100, 0.25);
+        pointer-events: none;
+      }
+
+      .hex-cell.highlight-danger {
+        box-shadow: inset 0 0 0 3px rgba(255, 200, 0, 0.8);
+      }
+
+      .hex-cell.highlight-danger::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 200, 0, 0.15);
+        pointer-events: none;
+      }
+
+      /* Crossfire zone - hexes covered by 2+ friendly units (green) */
+      .hex-cell.highlight-crossfire {
+        box-shadow: inset 0 0 0 4px rgba(100, 200, 100, 0.9);
+      }
+
+      .hex-cell.highlight-crossfire::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(100, 200, 100, 0.35);
+        pointer-events: none;
+      }
+
+      @keyframes pulse-target {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
+
+      /* Unit selection highlight */
+      .unit-container.selected .unit-marker {
+        filter: brightness(1.3) drop-shadow(0 0 8px rgba(100, 255, 100, 0.8));
+      }
+
+      /* Mineral indicators */
+      .mineral-marker {
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        background: radial-gradient(circle at 30% 30%, #ff8c4a, #e55a3c 60%, #b33a1c);
+        border-radius: 50%;
+        box-shadow:
+          0 2px 4px rgba(0, 0, 0, 0.4),
+          inset 0 -2px 4px rgba(0, 0, 0, 0.3),
+          inset 0 2px 4px rgba(255, 200, 150, 0.4);
+        pointer-events: none;
+        z-index: 5;
+        transition: opacity 0.3s ease, filter 0.3s ease;
+      }
+
+      /* Mineral underwater (on flooded terrain) */
+      .mineral-marker.underwater {
+        opacity: 0.4;
+        filter: blur(1px) saturate(0.7);
+      }
     `;
     document.head.appendChild(style);
   }
@@ -372,12 +500,109 @@ export class CSSHexRenderer {
   }
 
   /**
+   * Set player ID to color mapping (e.g., { "p1-abc123": "red", "p2-xyz789": "blue" })
+   */
+  setPlayerColors(playerColors: Record<string, string>): void {
+    this.playerColors = playerColors;
+    // Rebuild units if we already have units loaded
+    if (this.units.length > 0) {
+      this.rebuildUnits();
+    }
+  }
+
+  /**
    * Set units for rendering
    */
   setUnits(units: Unit[]): void {
     this.units = units;
     console.log('CSSHexRenderer.setUnits called with', units.length, 'units');
     this.rebuildUnits();
+  }
+
+  /**
+   * Set minerals for rendering
+   */
+  setMinerals(minerals: Mineral[]): void {
+    this.minerals = minerals;
+    console.log('CSSHexRenderer.setMinerals called with', minerals.length, 'minerals');
+    this.rebuildMinerals();
+  }
+
+  /**
+   * Rebuild the minerals layer
+   */
+  private rebuildMinerals(): void {
+    // Clear existing mineral elements
+    this.mineralsContainer.innerHTML = '';
+    this.mineralElements.clear();
+
+    // Create mineral elements for minerals on the map (not loaded in cargo)
+    // Minerals in cargo have position { q: -999, r: -999 }
+    for (const mineral of this.minerals) {
+      if (mineral.position.q === -999 || mineral.position.r === -999) {
+        // Mineral is loaded in cargo, don't render
+        continue;
+      }
+
+      const element = this.createMineralElement(mineral);
+      this.mineralElements.set(mineral.id, element);
+      this.mineralsContainer.appendChild(element);
+    }
+  }
+
+  /**
+   * Create a mineral marker element
+   */
+  private createMineralElement(mineral: Mineral): HTMLDivElement {
+    const element = document.createElement('div');
+    element.className = 'mineral-marker';
+    element.dataset.mineralId = mineral.id;
+
+    // Calculate pixel position
+    const pos = axialToPixel(mineral.position.q, mineral.position.r, HEX_SIZE);
+
+    // Center the mineral on the hex
+    element.style.left = `${pos.x - 8}px`; // 8 = 16px width / 2
+    element.style.top = `${pos.y - 8}px`;  // 8 = 16px height / 2
+
+    // Check if mineral is underwater based on tide and terrain
+    const terrain = this.getTerrainAtHex(mineral.position);
+    if (terrain && !canCollectMineral(terrain, this.currentTide)) {
+      element.classList.add('underwater');
+    }
+
+    return element;
+  }
+
+  /**
+   * Get terrain type at a specific hex
+   */
+  private getTerrainAtHex(coord: HexCoord): TerrainType | null {
+    const hex = this.terrainHexes.find(
+      t => t.coord.q === coord.q && t.coord.r === coord.r
+    );
+    return hex ? hex.type : null;
+  }
+
+  /**
+   * Update mineral visibility based on current tide
+   */
+  private updateMineralVisibility(): void {
+    for (const mineral of this.minerals) {
+      if (mineral.position.q === -999 || mineral.position.r === -999) {
+        continue;
+      }
+
+      const element = this.mineralElements.get(mineral.id);
+      if (!element) continue;
+
+      const terrain = this.getTerrainAtHex(mineral.position);
+      if (terrain && !canCollectMineral(terrain, this.currentTide)) {
+        element.classList.add('underwater');
+      } else {
+        element.classList.remove('underwater');
+      }
+    }
   }
 
   /**
@@ -412,9 +637,15 @@ export class CSSHexRenderer {
     container.dataset.unitType = unit.type;
     container.dataset.owner = unit.owner;
 
-    // Extract player color from owner (e.g., "player-red" -> "red", "lab-team1-red" -> "red")
-    const ownerParts = unit.owner.split('-');
-    const ownerColor = ownerParts[ownerParts.length - 1];
+    // Get player color from mapping, or fallback to extracting from owner string
+    // In game mode: playerColors map has { "p1-abc123": "red" }
+    // In lab mode: owner is "lab-team1-red", extract "red" from end
+    let ownerColor = this.playerColors[unit.owner];
+    if (!ownerColor) {
+      // Fallback: extract color from owner string (for lab mode compatibility)
+      const ownerParts = unit.owner.split('-');
+      ownerColor = ownerParts[ownerParts.length - 1];
+    }
     const color = PLAYER_COLORS[ownerColor] || '#ffffff';
 
     // Get all hexes occupied by this unit
@@ -646,6 +877,9 @@ export class CSSHexRenderer {
         element.style.backgroundColor = getTerrainColorHex(hex.type, this.currentTide);
       }
     }
+
+    // Update mineral visibility based on new tide
+    this.updateMineralVisibility();
   }
 
   /**
@@ -839,12 +1073,69 @@ export class CSSHexRenderer {
   }
 
   /**
+   * Set highlighted hexes with a specific type
+   * @param hexes - Array of hex coordinates to highlight
+   * @param type - Type of highlight (range, target, selected, danger, crossfire)
+   */
+  setHighlightedHexes(
+    hexes: Array<{ q: number; r: number }>,
+    type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire'
+  ): void {
+    const className = `highlight-${type}`;
+
+    // Add highlight class to each specified hex
+    for (const hex of hexes) {
+      const element = this.hexElements.get(`${hex.q},${hex.r}`);
+      if (element) {
+        element.classList.add(className);
+      }
+    }
+  }
+
+  /**
+   * Clear all hex highlights
+   */
+  clearHighlights(): void {
+    const highlightClasses = ['highlight-range', 'highlight-target', 'highlight-selected', 'highlight-danger', 'highlight-crossfire'];
+
+    for (const element of this.hexElements.values()) {
+      for (const cls of highlightClasses) {
+        element.classList.remove(cls);
+      }
+    }
+  }
+
+  /**
+   * Set a unit as selected (visual highlight)
+   */
+  setUnitSelected(unitId: string, selected: boolean): void {
+    const unitElement = this.unitElements.get(unitId);
+    if (unitElement) {
+      if (selected) {
+        unitElement.classList.add('selected');
+      } else {
+        unitElement.classList.remove('selected');
+      }
+    }
+  }
+
+  /**
+   * Clear all unit selections
+   */
+  clearUnitSelections(): void {
+    for (const element of this.unitElements.values()) {
+      element.classList.remove('selected');
+    }
+  }
+
+  /**
    * Clean up resources
    */
   destroy(): void {
     this.container.remove();
     this.hexElements.clear();
     this.unitElements.clear();
+    this.mineralElements.clear();
     this.zoomChangeCallbacks.clear();
   }
 }

@@ -2,7 +2,7 @@
  * HUD (Heads-Up Display) component for game interface
  */
 
-import type { TideLevel, GamePhase } from '@/shared/game/types';
+import { UnitType, type TideLevel, type GamePhase, type Unit, type Mineral, type HexCoord } from '@/shared/game/types';
 
 export interface LobbyPlayer {
   id: string;
@@ -16,6 +16,14 @@ export interface PhaseInfo {
   isMyTurn: boolean;
   currentPlayerName: string;
   currentPlayerColor: string;
+}
+
+export interface UnitActionContext {
+  unit: Unit;
+  minerals: Mineral[];  // Minerals at unit's position
+  cargo: (string)[];    // Current cargo (unit IDs or mineral IDs)
+  cargoSlots: number;   // Max cargo capacity
+  adjacentHexes: HexCoord[];  // Valid hexes for dropping cargo
 }
 
 const PHASE_INSTRUCTIONS: Record<GamePhase, string> = {
@@ -40,6 +48,7 @@ export class HUD {
   private timerInterval: number | null = null;
   private turnEndTime: number = 0;
   private isReady: boolean = false;
+  private timerExpiredCallback: (() => void) | null = null;
 
   // New elements for turn/phase display
   private currentPlayerEl: HTMLElement;
@@ -54,6 +63,11 @@ export class HUD {
   private zoomOutBtn: HTMLButtonElement;
   private zoomFitBtn: HTMLButtonElement;
   private zoomLevelEl: HTMLElement;
+
+  // Tide forecast
+  private tideForecastContainer: HTMLElement;
+  private tideForecast1El: HTMLElement;
+  private tideForecast2El: HTMLElement;
 
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
@@ -80,6 +94,11 @@ export class HUD {
     this.zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
     this.zoomFitBtn = document.getElementById('zoom-fit-btn') as HTMLButtonElement;
     this.zoomLevelEl = document.getElementById('zoom-level')!;
+
+    // Tide forecast
+    this.tideForecastContainer = document.getElementById('tide-forecast-container')!;
+    this.tideForecast1El = document.getElementById('tide-forecast-1')!;
+    this.tideForecast2El = document.getElementById('tide-forecast-2')!;
   }
 
   /**
@@ -130,6 +149,44 @@ export class HUD {
   }
 
   /**
+   * Update tide forecast display based on converter count.
+   * @param forecast Array of future tide levels (0-2 items based on converter count)
+   * @param converterCount Number of converters the player owns
+   */
+  updateTideForecast(forecast: TideLevel[], converterCount: number): void {
+    // Reset visibility
+    this.tideForecast1El.classList.add('hidden');
+    this.tideForecast2El.classList.add('hidden');
+    this.tideForecastContainer.classList.remove('no-converter');
+
+    if (converterCount === 0) {
+      // No converter - show blurred placeholder
+      this.tideForecastContainer.classList.add('no-converter');
+      this.tideForecast1El.textContent = '?';
+      this.tideForecast1El.className = 'tide-forecast-item unknown';
+      return;
+    }
+
+    // Show forecast based on converter count
+    if (forecast.length >= 1) {
+      this.updateForecastItem(this.tideForecast1El, forecast[0], 1);
+    }
+
+    if (forecast.length >= 2 && converterCount >= 2) {
+      this.updateForecastItem(this.tideForecast2El, forecast[1], 2);
+    }
+  }
+
+  /**
+   * Update a single forecast item element
+   */
+  private updateForecastItem(el: HTMLElement, tide: TideLevel, turnOffset: number): void {
+    el.textContent = `+${turnOffset}: ${tide.toUpperCase()}`;
+    el.classList.remove('hidden', 'low', 'normal', 'high', 'unknown');
+    el.classList.add(tide);
+  }
+
+  /**
    * Start turn timer
    */
   startTimer(durationMs: number): void {
@@ -165,6 +222,9 @@ export class HUD {
 
     if (remaining === 0) {
       this.stopTimer();
+      if (this.timerExpiredCallback) {
+        this.timerExpiredCallback();
+      }
     }
   }
 
@@ -190,6 +250,13 @@ export class HUD {
    */
   onEndTurn(callback: () => void): void {
     this.endTurnBtn.addEventListener('click', callback);
+  }
+
+  /**
+   * Set timer expired callback (auto-end turn)
+   */
+  onTimerExpired(callback: () => void): void {
+    this.timerExpiredCallback = callback;
   }
 
   /**
@@ -362,10 +429,366 @@ export class HUD {
     this.instructionsEl.style.display = 'none';
   }
 
+  // ============================================================================
+  // Lift-Off Decision UI
+  // ============================================================================
+
+  private liftOffDecisionCallback: ((decision: boolean) => void) | null = null;
+  private liftOffActionCallback: (() => void) | null = null;
+  private liftOffModal: HTMLElement | null = null;
+  private liftOffBtn: HTMLButtonElement | null = null;
+
+  /**
+   * Show the lift-off decision modal (Turn 21)
+   * Player chooses to lift off now or stay until turn 25
+   */
+  showLiftOffDecision(takeOffCost: number, callback: (decision: boolean) => void): void {
+    this.liftOffDecisionCallback = callback;
+
+    // Create modal if it doesn't exist
+    if (!this.liftOffModal) {
+      this.liftOffModal = document.createElement('div');
+      this.liftOffModal.id = 'lift-off-modal';
+      this.liftOffModal.className = 'modal';
+      document.body.appendChild(this.liftOffModal);
+    }
+
+    this.liftOffModal.innerHTML = `
+      <div class="modal-content lift-off-decision">
+        <h2>Lift-Off Decision (Turn 21)</h2>
+        <p>It's time to decide your strategy:</p>
+        <div class="decision-options">
+          <div class="decision-option">
+            <h3>Lift Off Now</h3>
+            <p>Take off immediately and secure your current cargo.</p>
+            <p class="cost">Take-off cost: <strong>${takeOffCost} AP</strong></p>
+            <button id="lift-off-now-btn" class="btn btn-primary">Lift Off Now</button>
+          </div>
+          <div class="decision-option">
+            <h3>Stay Until Turn 25</h3>
+            <p>Continue playing for 4 more turns. Risk vs reward!</p>
+            <p class="warning">⚠️ Must lift off by turn 25 or be stranded.</p>
+            <button id="stay-btn" class="btn btn-secondary">Stay</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.liftOffModal.style.display = 'flex';
+
+    // Add event listeners
+    const liftOffNowBtn = document.getElementById('lift-off-now-btn');
+    const stayBtn = document.getElementById('stay-btn');
+
+    liftOffNowBtn?.addEventListener('click', () => {
+      this.hideLiftOffDecision();
+      if (this.liftOffDecisionCallback) {
+        this.liftOffDecisionCallback(true);
+      }
+    });
+
+    stayBtn?.addEventListener('click', () => {
+      this.hideLiftOffDecision();
+      if (this.liftOffDecisionCallback) {
+        this.liftOffDecisionCallback(false);
+      }
+    });
+  }
+
+  /**
+   * Hide the lift-off decision modal
+   */
+  hideLiftOffDecision(): void {
+    if (this.liftOffModal) {
+      this.liftOffModal.style.display = 'none';
+    }
+  }
+
+  /**
+   * Show lift-off button (during turns 21-25 when player can lift off)
+   */
+  showLiftOffButton(takeOffCost: number, currentAP: number): void {
+    if (!this.liftOffBtn) {
+      this.liftOffBtn = document.createElement('button');
+      this.liftOffBtn.id = 'lift-off-btn';
+      this.liftOffBtn.className = 'btn btn-liftoff';
+
+      // Add next to end turn button
+      this.endTurnBtn.parentElement?.appendChild(this.liftOffBtn);
+
+      this.liftOffBtn.addEventListener('click', () => {
+        if (this.liftOffActionCallback) {
+          this.liftOffActionCallback();
+        }
+      });
+    }
+
+    const canAfford = currentAP >= takeOffCost;
+    this.liftOffBtn.textContent = `🚀 Lift Off (${takeOffCost} AP)`;
+    this.liftOffBtn.disabled = !canAfford;
+    this.liftOffBtn.style.display = 'inline-block';
+
+    if (!canAfford) {
+      this.liftOffBtn.title = `Need ${takeOffCost} AP to lift off (you have ${currentAP})`;
+    } else {
+      this.liftOffBtn.title = 'Lift off and end the game for yourself';
+    }
+  }
+
+  /**
+   * Hide lift-off button
+   */
+  hideLiftOffButton(): void {
+    if (this.liftOffBtn) {
+      this.liftOffBtn.style.display = 'none';
+    }
+  }
+
+  /**
+   * Set lift-off action callback (manual lift-off during turns 21-25)
+   */
+  onLiftOff(callback: () => void): void {
+    this.liftOffActionCallback = callback;
+  }
+
+  // ============================================================================
+  // Unit Context Actions (Mineral Pickup/Drop)
+  // ============================================================================
+
+  private unitContextPanel: HTMLElement | null = null;
+  private loadCallback: ((mineralId: string) => void) | null = null;
+  private unloadCallback: ((cargoId: string, destination: HexCoord) => void) | null = null;
+  private selectedDropHex: HexCoord | null = null;
+  private currentContext: UnitActionContext | null = null;
+
+  /**
+   * Show unit context action panel when a transporter is selected
+   */
+  showUnitActions(context: UnitActionContext): void {
+    this.currentContext = context;
+
+    // Only show for transporter units
+    const transporterTypes = [UnitType.Crab, UnitType.Converter, UnitType.Barge];
+    if (!transporterTypes.includes(context.unit.type)) {
+      this.hideUnitActions();
+      return;
+    }
+
+    // Create panel if it doesn't exist
+    if (!this.unitContextPanel) {
+      this.unitContextPanel = document.createElement('div');
+      this.unitContextPanel.id = 'unit-context-panel';
+      this.unitContextPanel.className = 'unit-context-panel';
+      document.body.appendChild(this.unitContextPanel);
+    }
+
+    const unitName = context.unit.type.charAt(0).toUpperCase() + context.unit.type.slice(1);
+    const cargoCount = context.cargo.length;
+    const freeSlots = context.cargoSlots - cargoCount;
+
+    let actionsHtml = `
+      <div class="unit-context-header">
+        <span class="unit-name">${unitName}</span>
+        <span class="cargo-info">Cargo: ${cargoCount}/${context.cargoSlots}</span>
+      </div>
+      <div class="unit-actions">
+    `;
+
+    // Pickup mineral button (if mineral at position and has free slots)
+    if (context.minerals.length > 0 && freeSlots > 0) {
+      for (const mineral of context.minerals) {
+        actionsHtml += `
+          <button class="action-btn pickup-btn" data-mineral-id="${mineral.id}">
+            ⛏️ Pick up Mineral
+            <span class="action-cost">1 AP</span>
+          </button>
+        `;
+      }
+    }
+
+    // Drop cargo buttons (if has cargo)
+    if (cargoCount > 0) {
+      actionsHtml += `
+        <div class="drop-section">
+          <label>Drop cargo:</label>
+          <select id="cargo-select" class="cargo-select">
+            ${context.cargo.map((cargoId, idx) => `
+              <option value="${cargoId}">Cargo ${idx + 1}</option>
+            `).join('')}
+          </select>
+          <div class="drop-hexes">
+            ${context.adjacentHexes.map((hex, idx) => `
+              <button class="action-btn drop-hex-btn" data-hex-q="${hex.q}" data-hex-r="${hex.r}">
+                Drop at (${hex.q},${hex.r})
+                <span class="action-cost">1 AP</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Close button
+    actionsHtml += `
+      </div>
+      <button class="action-btn close-btn" id="close-unit-panel">✕ Close</button>
+    `;
+
+    this.unitContextPanel.innerHTML = actionsHtml;
+    this.unitContextPanel.style.display = 'block';
+
+    // Add event listeners
+    this.setupUnitActionListeners();
+  }
+
+  /**
+   * Set up event listeners for unit action buttons
+   */
+  private setupUnitActionListeners(): void {
+    if (!this.unitContextPanel) return;
+
+    // Pickup buttons
+    const pickupBtns = this.unitContextPanel.querySelectorAll('.pickup-btn');
+    pickupBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mineralId = (btn as HTMLElement).dataset.mineralId;
+        if (mineralId && this.loadCallback) {
+          this.loadCallback(mineralId);
+        }
+      });
+    });
+
+    // Drop buttons
+    const dropBtns = this.unitContextPanel.querySelectorAll('.drop-hex-btn');
+    dropBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const q = parseInt((btn as HTMLElement).dataset.hexQ || '0', 10);
+        const r = parseInt((btn as HTMLElement).dataset.hexR || '0', 10);
+        const cargoSelect = document.getElementById('cargo-select') as HTMLSelectElement;
+        const cargoId = cargoSelect?.value;
+        if (cargoId && this.unloadCallback) {
+          this.unloadCallback(cargoId, { q, r });
+        }
+      });
+    });
+
+    // Close button
+    const closeBtn = document.getElementById('close-unit-panel');
+    closeBtn?.addEventListener('click', () => {
+      this.hideUnitActions();
+    });
+  }
+
+  /**
+   * Hide unit context action panel
+   */
+  hideUnitActions(): void {
+    if (this.unitContextPanel) {
+      this.unitContextPanel.style.display = 'none';
+    }
+    this.currentContext = null;
+    this.selectedDropHex = null;
+  }
+
+  /**
+   * Set callback for mineral load action
+   */
+  onLoad(callback: (mineralId: string) => void): void {
+    this.loadCallback = callback;
+  }
+
+  /**
+   * Set callback for cargo unload action
+   */
+  onUnload(callback: (cargoId: string, destination: HexCoord) => void): void {
+    this.unloadCallback = callback;
+  }
+
+  /**
+   * Update the unit actions panel (e.g., after AP change)
+   */
+  updateUnitActions(context: UnitActionContext): void {
+    if (this.unitContextPanel?.style.display === 'block') {
+      this.showUnitActions(context);
+    }
+  }
+
+  /**
+   * Show game over modal with final scores
+   */
+  showGameOver(scores: Record<string, number>, playerNames: Record<string, string>, winners: string[]): void {
+    // Create modal if it doesn't exist
+    if (!this.liftOffModal) {
+      this.liftOffModal = document.createElement('div');
+      this.liftOffModal.id = 'lift-off-modal';
+      this.liftOffModal.className = 'modal';
+      document.body.appendChild(this.liftOffModal);
+    }
+
+    const sortedPlayers = Object.entries(scores).sort(([, a], [, b]) => b - a);
+    const winnerText = winners.length > 1
+      ? `Winners: ${winners.map(id => playerNames[id] || id).join(', ')}`
+      : `Winner: ${playerNames[winners[0]] || winners[0]}`;
+
+    const scoreRows = sortedPlayers.map(([playerId, score], index) => {
+      const isWinner = winners.includes(playerId);
+      const name = playerNames[playerId] || playerId;
+      return `
+        <tr class="${isWinner ? 'winner' : ''}">
+          <td>${index + 1}</td>
+          <td>${name}${isWinner ? ' 🏆' : ''}</td>
+          <td>${score}</td>
+        </tr>
+      `;
+    }).join('');
+
+    this.liftOffModal.innerHTML = `
+      <div class="modal-content game-over">
+        <h2>🎉 Game Over!</h2>
+        <h3>${winnerText}</h3>
+        <table class="scores-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Player</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${scoreRows}
+          </tbody>
+        </table>
+        <p class="scoring-info">
+          Scoring: 2 pts/mineral, 1 pt/equipment, 1 pt/intact turret<br>
+          (Only counts if Astronef lifted off successfully)
+        </p>
+        <button id="game-over-close-btn" class="btn btn-primary">Close</button>
+      </div>
+    `;
+
+    this.liftOffModal.style.display = 'flex';
+
+    document.getElementById('game-over-close-btn')?.addEventListener('click', () => {
+      this.liftOffModal!.style.display = 'none';
+    });
+  }
+
   /**
    * Clean up resources
    */
   destroy(): void {
     this.stopTimer();
+    if (this.liftOffModal) {
+      this.liftOffModal.remove();
+      this.liftOffModal = null;
+    }
+    if (this.liftOffBtn) {
+      this.liftOffBtn.remove();
+      this.liftOffBtn = null;
+    }
+    if (this.unitContextPanel) {
+      this.unitContextPanel.remove();
+      this.unitContextPanel = null;
+    }
   }
 }

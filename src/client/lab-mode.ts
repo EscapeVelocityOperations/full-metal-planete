@@ -6,13 +6,65 @@
 import { createRenderer, type IHexRenderer, type RendererType } from '@/client/renderer/renderer-factory';
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, type GameState, type HexCoord, type Unit, type TideLevel, type PlayerColor, type Player } from '@/shared/game/types';
-import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValid, hexKey } from '@/shared/game/hex';
-import { generateDemoMap } from '@/shared/game/map-generator';
+import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANTS, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type Player, type Mineral } from '@/shared/game/types';
+import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, isTurretPlacementValid, hexKey, findPath, getReachableHexes, hexFromKey, hexNeighbors, type PathTerrainGetter } from '@/shared/game/hex';
+import { generateDemoMap, generateMinerals } from '@/shared/game/map-generator';
+import { validateLoadAction, validateUnloadAction } from '@/shared/game/actions';
+import { applyLoadAction, applyUnloadAction } from '@/shared/game/state';
+import {
+  isCombatUnit,
+  canUnitFire,
+  getFireableHexes,
+  getSharedFireableHexes,
+  getValidTargets,
+  executeShot,
+  resetShotsForTurn,
+  getActiveCombatUnits,
+  canCaptureTarget,
+  executeCapture,
+  type TerrainGetter,
+} from '@/shared/game/combat';
 
 interface LabModeConfig {
   team1Color: PlayerColor;
   team2Color: PlayerColor;
+}
+
+/**
+ * Lab Mode operating mode
+ * - setup: Place units on the map with rotation support
+ * - play: Simulate gameplay with AP tracking and movement
+ */
+type LabModeType = 'setup' | 'play';
+
+/**
+ * Play sub-mode for different actions
+ * - move: Select and move units
+ * - combat: Select 2 combat units and fire at targets
+ * - capture: Select 2 combat units to capture enemy unit
+ */
+type PlaySubMode = 'move' | 'combat' | 'capture';
+
+/**
+ * Helper to get movement cost for a unit type from UNIT_PROPERTIES.
+ */
+function getMovementCost(unitType: UnitType): number {
+  return UNIT_PROPERTIES[unitType].movementCost;
+}
+
+/**
+ * Helper to check if a unit is a transporter (can carry cargo).
+ */
+function isTransporter(unitType: UnitType): boolean {
+  return unitType === UnitType.Barge || unitType === UnitType.Crab || unitType === UnitType.Converter;
+}
+
+/**
+ * Helper to get cargo capacity for a unit type.
+ */
+function getCargoCapacity(unitType: UnitType): number {
+  const props = UNIT_PROPERTIES[unitType];
+  return props.cargoSlots ?? 0;
 }
 
 export class LabMode {
@@ -26,10 +78,26 @@ export class LabMode {
   private deploymentInventory: DeploymentInventory | null = null;
   private selectedUnit: Unit | null = null;
 
+  // Lab mode state
+  private mode: LabModeType = 'setup';
+  private playSubMode: PlaySubMode = 'move';
+  private selectedMapUnit: Unit | null = null; // Unit selected on map (for play mode)
+  private movementPreview: HexCoord[] = []; // Path preview for movement
+  private highlightedHexes: Set<string> = new Set(); // Valid move destinations
+
+  // Combat state
+  private selectedCombatUnits: Unit[] = []; // Up to 2 combat units for crossfire
+  private validTargets: Unit[] = []; // Enemy units that can be targeted
+
+  // Capture state
+  private selectedCaptureUnits: Unit[] = []; // Up to 2 combat units for capture
+  private captureTargets: Unit[] = []; // Enemy units that can be captured
+
   // UI elements
   private controlPanel: HTMLDivElement | null = null;
+  private modeToggle: HTMLDivElement | null = null;
 
-  constructor(canvas: HTMLCanvasElement, config: LabModeConfig = { team1Color: 'red', team2Color: 'blue' }) {
+  constructor(canvas: HTMLCanvasElement, config: LabModeConfig = { team1Color: PlayerColor.Red, team2Color: PlayerColor.Blue }) {
     this.canvas = canvas;
     this.config = config;
     this.gameState = this.createInitialState();
@@ -47,17 +115,21 @@ export class LabMode {
         id: team1Id,
         name: 'Team 1',
         color: this.config.team1Color,
-        astronefPosition: null,
+        isConnected: true,
+        isReady: true,
+        astronefPosition: [],
         hasLiftedOff: false,
-        savedActionPoints: 0,
+        capturedAstronefs: [],
       },
       {
         id: team2Id,
         name: 'Team 2',
         color: this.config.team2Color,
-        astronefPosition: null,
+        isConnected: true,
+        isReady: true,
+        astronefPosition: [],
         hasLiftedOff: false,
-        savedActionPoints: 0,
+        capturedAstronefs: [],
       },
     ];
 
@@ -69,20 +141,28 @@ export class LabMode {
       ...this.createTeamUnits(team2Id, this.config.team2Color),
     ];
 
+    // currentPlayer must match unit owner format for validation
+    const team1OwnerId = `${team1Id}-${this.config.team1Color}`;
+
     return {
       gameId: 'lab-mode',
       players,
       units,
       terrain: [],
-      currentPlayer: team1Id,
-      phase: 'playing',
+      minerals: [],
+      bridges: [],
+      currentPlayer: team1OwnerId,
+      phase: GamePhase.Playing,
       turn: 3,
       turnOrder: [team1Id, team2Id],
-      currentTide: 'normal',
-      tideSchedule: [],
+      currentTide: TideLevel.Normal,
+      tideDeck: [],
+      tideDiscard: [],
       actionPoints: 15,
+      savedActionPoints: { [team1Id]: 0, [team2Id]: 0 },
       turnStartTime: Date.now(),
       turnTimeLimit: 300000,
+      liftOffDecisions: {},
     };
   }
 
@@ -100,9 +180,10 @@ export class LabMode {
       owner: ownerWithColor,
       position: null,
       rotation: 0,
+      shotsRemaining: 2,
+      isStuck: false,
+      isNeutralized: false,
       cargo: [],
-      minerals: 0,
-      actionPointsUsed: 0,
     });
 
     return [
@@ -158,6 +239,11 @@ export class LabMode {
     const demoTerrain = generateDemoMap();
     this.gameState.terrain = demoTerrain;
 
+    // Generate minerals on valid terrain
+    const minerals = generateMinerals(demoTerrain);
+    this.gameState.minerals = minerals;
+    console.log('Lab mode: Generated', minerals.length, 'minerals');
+
     if (this.renderer) {
       const terrainHexes: TerrainHex[] = demoTerrain.map(hex => ({
         coord: { q: hex.coord.q, r: hex.coord.r },
@@ -165,6 +251,11 @@ export class LabMode {
       }));
       this.renderer.setTerrainData(terrainHexes);
       this.renderer.setTide(this.gameState.currentTide);
+
+      // Render minerals on the map
+      if (this.renderer.setMinerals) {
+        this.renderer.setMinerals(minerals);
+      }
     }
   }
 
@@ -188,11 +279,512 @@ export class LabMode {
     document.addEventListener('keydown', (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         this.deselectUnit();
+        this.deselectMapUnit();
+      } else if (event.key === 'r' || event.key === 'R') {
+        this.rotateSelectedUnit();
       }
     });
 
     // Set up zoom controls (reuse the existing HTML elements)
     this.setupZoomControls();
+  }
+
+  /**
+   * Rotate the currently selected unit (for placement)
+   */
+  private rotateSelectedUnit(): void {
+    if (this.mode !== 'setup') return;
+
+    if (this.selectedUnit) {
+      // Rotate unit in inventory selection
+      this.selectedUnit.rotation = ((this.selectedUnit.rotation || 0) + 1) % 6;
+      console.log('Rotated selected unit to rotation:', this.selectedUnit.rotation);
+
+      // Update renderer to show rotation preview if unit is placed
+      if (this.selectedUnit.position && this.renderer?.setUnits) {
+        this.renderer.setUnits(this.gameState.units);
+        this.render();
+      }
+    }
+  }
+
+  /**
+   * Deselect the map unit (for play mode)
+   */
+  private deselectMapUnit(): void {
+    this.selectedMapUnit = null;
+    this.movementPreview = [];
+    this.clearCombatSelection();
+    this.clearCaptureSelection();
+    this.clearHighlights();
+  }
+
+  /**
+   * Clear combat selection and highlights
+   * If still in combat mode, restore the tactical overview
+   */
+  private clearCombatSelection(): void {
+    this.selectedCombatUnits = [];
+    this.validTargets = [];
+
+    // Clear unit selection visual
+    const cssRenderer = this.renderer as { clearUnitSelections?: () => void };
+    cssRenderer.clearUnitSelections?.();
+
+    // If still in combat mode, show the tactical overview again
+    if (this.playSubMode === 'combat') {
+      this.showAllCombatRanges();
+    } else {
+      this.renderer?.clearHighlights?.();
+    }
+  }
+
+  /**
+   * Clear capture selection and highlights
+   * If still in capture mode, restore the tactical overview
+   */
+  private clearCaptureSelection(): void {
+    this.selectedCaptureUnits = [];
+    this.captureTargets = [];
+
+    // Clear unit selection visual
+    const cssRenderer = this.renderer as { clearUnitSelections?: () => void };
+    cssRenderer.clearUnitSelections?.();
+
+    // If still in capture mode, show the capture zones again
+    if (this.playSubMode === 'capture') {
+      this.showAllCaptureZones();
+    } else {
+      this.renderer?.clearHighlights?.();
+    }
+  }
+
+  /**
+   * Select a combat unit for crossfire
+   */
+  private selectCombatUnit(unit: Unit): void {
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+
+    // Only allow selecting friendly combat units that can fire
+    if (!unit.owner.includes(currentColor)) {
+      console.log('Cannot select enemy unit for combat');
+      return;
+    }
+
+    if (!isCombatUnit(unit)) {
+      console.log('Unit is not a combat unit');
+      return;
+    }
+
+    if (!canUnitFire(unit)) {
+      console.log('Unit cannot fire (stuck, neutralized, or no shots remaining)');
+      return;
+    }
+
+    // Check if unit is already selected
+    const alreadySelected = this.selectedCombatUnits.some((u) => u.id === unit.id);
+    if (alreadySelected) {
+      // Deselect the unit
+      this.selectedCombatUnits = this.selectedCombatUnits.filter((u) => u.id !== unit.id);
+      console.log('Deselected combat unit:', unit.type);
+    } else if (this.selectedCombatUnits.length < 2) {
+      // Select the unit
+      this.selectedCombatUnits.push(unit);
+      console.log('Selected combat unit:', unit.type, `(${this.selectedCombatUnits.length}/2)`);
+    } else {
+      console.log('Already have 2 combat units selected');
+      return;
+    }
+
+    // Update visual selection
+    this.updateCombatSelection();
+  }
+
+  /**
+   * Update combat selection visuals (highlights and targets)
+   * Maintains the tactical overview (all ranges) while adding selection indicators
+   */
+  private updateCombatSelection(): void {
+    const cssRenderer = this.renderer as { clearUnitSelections?: () => void; setUnitSelected?: (id: string, selected: boolean) => void };
+    cssRenderer.clearUnitSelections?.();
+
+    // Always show the full tactical overview first
+    this.showAllCombatRanges();
+
+    const terrainGetter = this.getTerrainGetter();
+
+    // Highlight selected units (visual indicator on the unit sprite)
+    for (const unit of this.selectedCombatUnits) {
+      cssRenderer.setUnitSelected?.(unit.id, true);
+      // Also highlight the hex where the selected unit sits
+      if (unit.position) {
+        this.renderer?.setHighlightedHexes?.([unit.position], 'selected');
+      }
+    }
+
+    if (this.selectedCombatUnits.length === 2) {
+      // Get valid targets in the shared range of the two selected units
+      const [unit1, unit2] = this.selectedCombatUnits;
+      this.validTargets = getValidTargets(unit1, unit2, this.gameState.units, terrainGetter);
+
+      // Highlight target hexes (enemy units that can be destroyed)
+      const targetHexes = this.validTargets
+        .filter((u) => u.position)
+        .map((u) => u.position!);
+      if (targetHexes.length > 0) {
+        this.renderer?.setHighlightedHexes?.(targetHexes, 'target');
+      }
+
+      console.log(`Combat ready: ${this.validTargets.length} valid targets`);
+    } else {
+      this.validTargets = [];
+    }
+
+    this.updateControlPanel();
+    this.render();
+  }
+
+  /**
+   * Show all friendly combat units' ranges and crossfire zones.
+   * Called when entering combat mode to provide tactical overview.
+   * - Blue (range): Hexes reachable by at least one combat unit
+   * - Green (crossfire): Hexes reachable by 2+ combat units (valid destruction zones)
+   */
+  private showAllCombatRanges(): void {
+    this.renderer?.clearHighlights?.();
+
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+    const currentOwnerId = this.currentTeam === 'team1' ? 'lab-team1' : 'lab-team2';
+    const ownerWithColor = `${currentOwnerId}-${currentColor}`;
+
+    const terrainGetter = this.getTerrainGetter();
+
+    // Get all active combat units for current team
+    const combatUnits = this.gameState.units.filter(
+      (u) => u.owner === ownerWithColor && u.position && canUnitFire(u)
+    );
+
+    if (combatUnits.length === 0) {
+      console.log('No active combat units to show ranges for');
+      return;
+    }
+
+    // Count how many units can reach each hex
+    const hexCoverage = new Map<string, number>();
+    const hexCoords = new Map<string, HexCoord>();
+
+    for (const unit of combatUnits) {
+      const fireableHexes = getFireableHexes(unit, terrainGetter);
+      for (const hex of fireableHexes) {
+        const key = hexKey(hex);
+        hexCoverage.set(key, (hexCoverage.get(key) || 0) + 1);
+        hexCoords.set(key, hex);
+      }
+    }
+
+    // Separate hexes into single-coverage (range) and multi-coverage (crossfire)
+    const rangeHexes: HexCoord[] = [];
+    const crossfireHexes: HexCoord[] = [];
+
+    for (const [key, count] of hexCoverage) {
+      const hex = hexCoords.get(key)!;
+      if (count >= 2) {
+        crossfireHexes.push(hex);
+      } else {
+        rangeHexes.push(hex);
+      }
+    }
+
+    // Apply highlights - range first (blue), then crossfire (green) on top
+    if (rangeHexes.length > 0) {
+      this.renderer?.setHighlightedHexes?.(rangeHexes, 'range');
+    }
+    if (crossfireHexes.length > 0) {
+      this.renderer?.setHighlightedHexes?.(crossfireHexes, 'crossfire');
+    }
+
+    console.log(`Combat ranges: ${rangeHexes.length} single-coverage, ${crossfireHexes.length} crossfire zones`);
+    this.render();
+  }
+
+  /**
+   * Show all friendly combat units and potential capture zones.
+   * In capture mode, we highlight units that could participate in captures.
+   */
+  private showAllCaptureZones(): void {
+    this.renderer?.clearHighlights?.();
+
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+    const currentOwnerId = this.currentTeam === 'team1' ? 'lab-team1' : 'lab-team2';
+    const ownerWithColor = `${currentOwnerId}-${currentColor}`;
+
+    // Get all active combat units for current team (can fire = can capture)
+    const combatUnits = this.gameState.units.filter(
+      (u) => u.owner === ownerWithColor && u.position && isCombatUnit(u) && canUnitFire(u)
+    );
+
+    if (combatUnits.length < 2) {
+      console.log('Need at least 2 active combat units for capture');
+      return;
+    }
+
+    // Highlight friendly combat units that can participate in capture
+    const combatUnitHexes: HexCoord[] = combatUnits
+      .filter(u => u.position)
+      .map(u => u.position!);
+
+    if (combatUnitHexes.length > 0) {
+      this.renderer?.setHighlightedHexes?.(combatUnitHexes, 'range');
+    }
+
+    console.log(`Capture mode: ${combatUnits.length} combat units available for capture`);
+    this.render();
+  }
+
+  /**
+   * Select a combat unit for capture operation
+   */
+  private selectCaptureUnit(unit: Unit): void {
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+
+    // Only allow selecting friendly combat units that can fire
+    if (!unit.owner.includes(currentColor)) {
+      console.log('Cannot select enemy unit for capture');
+      return;
+    }
+
+    if (!isCombatUnit(unit)) {
+      console.log('Unit is not a combat unit');
+      return;
+    }
+
+    if (!canUnitFire(unit)) {
+      console.log('Unit cannot participate in capture (stuck or neutralized)');
+      return;
+    }
+
+    // Check if unit is already selected
+    const alreadySelected = this.selectedCaptureUnits.some((u) => u.id === unit.id);
+    if (alreadySelected) {
+      // Deselect the unit
+      this.selectedCaptureUnits = this.selectedCaptureUnits.filter((u) => u.id !== unit.id);
+      console.log('Deselected capture unit:', unit.type);
+    } else if (this.selectedCaptureUnits.length < 2) {
+      // Select the unit
+      this.selectedCaptureUnits.push(unit);
+      console.log('Selected capture unit:', unit.type, `(${this.selectedCaptureUnits.length}/2)`);
+    } else {
+      console.log('Already have 2 capture units selected');
+      return;
+    }
+
+    // Update visual selection
+    this.updateCaptureSelection();
+  }
+
+  /**
+   * Update capture selection visuals and find valid targets
+   */
+  private updateCaptureSelection(): void {
+    const cssRenderer = this.renderer as { clearUnitSelections?: () => void; setUnitSelected?: (id: string, selected: boolean) => void };
+    cssRenderer.clearUnitSelections?.();
+
+    // Show capture zones first
+    this.showAllCaptureZones();
+
+    const terrainGetter = this.getTerrainGetter();
+
+    // Highlight selected units
+    for (const unit of this.selectedCaptureUnits) {
+      cssRenderer.setUnitSelected?.(unit.id, true);
+      if (unit.position) {
+        this.renderer?.setHighlightedHexes?.([unit.position], 'selected');
+      }
+    }
+
+    if (this.selectedCaptureUnits.length === 2) {
+      // Find valid capture targets
+      const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+      const enemyUnits = this.gameState.units.filter(
+        (u) => u.position && !u.owner.includes(currentColor)
+      );
+
+      // Check which enemy units can be captured by the two selected units
+      this.captureTargets = [];
+      for (const enemy of enemyUnits) {
+        const validation = canCaptureTarget(
+          this.selectedCaptureUnits,
+          enemy,
+          this.gameState.units,
+          terrainGetter
+        );
+        if (validation.valid) {
+          this.captureTargets.push(enemy);
+        }
+      }
+
+      // Highlight capture target hexes
+      const targetHexes = this.captureTargets
+        .filter((u) => u.position)
+        .map((u) => u.position!);
+      if (targetHexes.length > 0) {
+        this.renderer?.setHighlightedHexes?.(targetHexes, 'target');
+      }
+
+      console.log(`Capture ready: ${this.captureTargets.length} valid targets`);
+    } else {
+      this.captureTargets = [];
+    }
+
+    this.updateControlPanel();
+    this.render();
+  }
+
+  /**
+   * Execute a capture action on a target unit
+   */
+  private executeCaptureAction(target: Unit): void {
+    if (this.selectedCaptureUnits.length !== 2) {
+      console.log('Need 2 combat units selected to capture');
+      return;
+    }
+
+    // Check AP cost (1 AP for capture)
+    const apCost = GAME_CONSTANTS.AP_COST_CAPTURE;
+    if (this.gameState.actionPoints < apCost) {
+      console.log(`Not enough AP. Need ${apCost}, have ${this.gameState.actionPoints}`);
+      return;
+    }
+
+    const terrainGetter = this.getTerrainGetter();
+    const result = executeCapture(
+      [this.selectedCaptureUnits[0], this.selectedCaptureUnits[1]],
+      target,
+      this.gameState.units,
+      terrainGetter
+    );
+
+    if (result.success) {
+      console.log(`Capture successful! Captured ${target.type}`);
+
+      // Update game state
+      this.gameState.units = result.updatedUnits;
+      this.gameState.actionPoints -= result.apCost;
+
+      // Update renderer
+      if (this.renderer?.setUnits) {
+        this.renderer.setUnits(this.gameState.units);
+      }
+
+      // Show feedback
+      this.showCaptureFeedback(target.position!);
+
+      // Clear capture selection
+      this.clearCaptureSelection();
+      this.updateAPDisplay();
+      this.updateControlPanel();
+      this.render();
+    } else {
+      console.log('Capture failed:', result.error);
+    }
+  }
+
+  /**
+   * Show visual feedback for a successful capture
+   */
+  private showCaptureFeedback(position: HexCoord): void {
+    // Flash the hex green briefly to indicate capture
+    this.renderer?.setHighlightedHexes?.([position], 'crossfire');
+
+    // Clear after animation
+    setTimeout(() => {
+      if (this.playSubMode === 'capture') {
+        this.showAllCaptureZones();
+      } else {
+        this.renderer?.clearHighlights?.();
+      }
+    }, 500);
+  }
+
+  /**
+   * Execute a shot at a target unit
+   */
+  private executeFireAction(target: Unit): void {
+    if (this.selectedCombatUnits.length !== 2) {
+      console.log('Need 2 combat units selected to fire');
+      return;
+    }
+
+    // Check AP cost
+    const apCost = GAME_CONSTANTS.AP_COST_FIRE;
+    if (this.gameState.actionPoints < apCost) {
+      console.log(`Not enough AP. Need ${apCost}, have ${this.gameState.actionPoints}`);
+      return;
+    }
+
+    const terrainGetter = this.getTerrainGetter();
+    const result = executeShot(
+      [this.selectedCombatUnits[0], this.selectedCombatUnits[1]],
+      target,
+      this.gameState.units,
+      terrainGetter
+    );
+
+    if (result.success) {
+      console.log(`Shot successful! Destroyed ${target.type}`);
+
+      // Update game state
+      this.gameState.units = result.updatedUnits;
+      this.gameState.actionPoints -= result.apCost;
+
+      // Update renderer
+      if (this.renderer?.setUnits) {
+        this.renderer.setUnits(this.gameState.units);
+      }
+
+      // Show feedback
+      this.showShotFeedback(target.position!);
+
+      // Clear combat selection
+      this.clearCombatSelection();
+      this.updateAPDisplay();
+      this.updateControlPanel();
+      this.render();
+    } else {
+      console.log('Shot failed:', result.error);
+    }
+  }
+
+  /**
+   * Show visual feedback for a successful shot
+   */
+  private showShotFeedback(position: HexCoord): void {
+    // Flash the hex red briefly
+    this.renderer?.setHighlightedHexes?.([position], 'danger');
+
+    // Clear after animation
+    setTimeout(() => {
+      this.renderer?.clearHighlights?.();
+    }, 500);
+  }
+
+  /**
+   * Reset shots for all units (call at start of turn)
+   */
+  private resetTurnShots(): void {
+    this.gameState.units = resetShotsForTurn(this.gameState.units);
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+    console.log('Reset shots for all units');
+  }
+
+  /**
+   * Clear hex highlights
+   */
+  private clearHighlights(): void {
+    this.highlightedHexes.clear();
+    // TODO: Update renderer to remove highlights
   }
 
   /**
@@ -387,6 +979,15 @@ export class LabMode {
           background: #c73a54;
         }
 
+        .lab-end-turn-btn {
+          background: #4a90e2;
+          color: #fff;
+        }
+
+        .lab-end-turn-btn:hover {
+          background: #357abd;
+        }
+
         .lab-back-btn {
           background: rgba(255, 255, 255, 0.1);
           color: #888;
@@ -404,9 +1005,361 @@ export class LabMode {
           margin-top: 10px;
           text-align: center;
         }
+
+        .lab-mode-selector {
+          display: flex;
+          gap: 10px;
+        }
+
+        .lab-mode-btn {
+          flex: 1;
+          padding: 12px;
+          border: 2px solid transparent;
+          border-radius: 8px;
+          background: rgba(255, 255, 255, 0.1);
+          color: #fff;
+          cursor: pointer;
+          font-weight: bold;
+          font-size: 14px;
+          transition: all 0.2s;
+        }
+
+        .lab-mode-btn:hover {
+          background: rgba(74, 144, 226, 0.2);
+        }
+
+        .lab-mode-btn.active {
+          border-color: #4a90e2;
+          background: rgba(74, 144, 226, 0.3);
+          color: #4a90e2;
+        }
+
+        .lab-rotate-btn {
+          width: 100%;
+          padding: 10px;
+          border: 2px solid #4a90e2;
+          border-radius: 8px;
+          background: rgba(74, 144, 226, 0.2);
+          color: #4a90e2;
+          cursor: pointer;
+          font-weight: bold;
+          font-size: 14px;
+          transition: all 0.2s;
+          margin-top: 8px;
+          min-height: 44px;
+        }
+
+        .lab-rotate-btn:hover {
+          background: rgba(74, 144, 226, 0.4);
+        }
+
+        .lab-rotate-btn:active {
+          background: rgba(74, 144, 226, 0.6);
+        }
+
+        .lab-selected-unit {
+          background: rgba(74, 144, 226, 0.2);
+          border-radius: 8px;
+          padding: 10px;
+          margin-top: 10px;
+        }
+
+        .lab-selected-unit-title {
+          font-size: 11px;
+          color: #888;
+          text-transform: uppercase;
+          margin-bottom: 5px;
+        }
+
+        .lab-selected-unit-name {
+          font-size: 16px;
+          font-weight: bold;
+          color: #4a90e2;
+        }
+
+        .lab-selected-unit-rotation {
+          font-size: 12px;
+          color: #888;
+          margin-top: 4px;
+        }
+
+        /* Play sub-mode selector (move vs combat) */
+        .lab-submode-selector {
+          display: flex;
+          gap: 8px;
+          margin-top: 10px;
+        }
+
+        .lab-submode-btn {
+          flex: 1;
+          padding: 10px;
+          border: 2px solid transparent;
+          border-radius: 6px;
+          background: rgba(255, 255, 255, 0.1);
+          color: #fff;
+          cursor: pointer;
+          font-weight: bold;
+          font-size: 13px;
+          transition: all 0.2s;
+          min-height: 44px;
+        }
+
+        .lab-submode-btn:hover {
+          background: rgba(255, 255, 255, 0.2);
+        }
+
+        .lab-submode-btn.active {
+          border-color: currentColor;
+        }
+
+        .lab-submode-btn.move {
+          color: #4a90e2;
+        }
+
+        .lab-submode-btn.move.active {
+          background: rgba(74, 144, 226, 0.3);
+        }
+
+        .lab-submode-btn.combat {
+          color: #ff6666;
+        }
+
+        .lab-submode-btn.combat.active {
+          background: rgba(255, 100, 100, 0.3);
+        }
+
+        .lab-submode-btn.capture {
+          color: #66ff66;
+        }
+
+        .lab-submode-btn.capture.active {
+          background: rgba(100, 255, 100, 0.3);
+        }
+
+        /* Combat selection display */
+        .lab-combat-selection {
+          background: rgba(255, 100, 100, 0.15);
+          border: 1px solid rgba(255, 100, 100, 0.3);
+          border-radius: 8px;
+          padding: 10px;
+          margin-top: 10px;
+        }
+
+        .lab-combat-title {
+          font-size: 11px;
+          color: #ff6666;
+          text-transform: uppercase;
+          margin-bottom: 8px;
+        }
+
+        .lab-combat-unit {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 5px 0;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .lab-combat-unit:last-child {
+          border-bottom: none;
+        }
+
+        .lab-combat-unit-name {
+          font-weight: bold;
+          color: #fff;
+        }
+
+        .lab-combat-unit-shots {
+          font-size: 12px;
+          color: #888;
+        }
+
+        .lab-fire-btn {
+          width: 100%;
+          padding: 12px;
+          border: 2px solid #ff6666;
+          border-radius: 8px;
+          background: rgba(255, 100, 100, 0.3);
+          color: #ff6666;
+          cursor: pointer;
+          font-weight: bold;
+          font-size: 14px;
+          margin-top: 10px;
+          min-height: 44px;
+          transition: all 0.2s;
+        }
+
+        .lab-fire-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .lab-fire-btn:not(:disabled):hover {
+          background: rgba(255, 100, 100, 0.5);
+        }
+
+        .lab-target-count {
+          font-size: 12px;
+          color: #ff6666;
+          margin-top: 8px;
+          text-align: center;
+        }
+
+        /* Capture selection display */
+        .lab-capture-selection {
+          background: rgba(100, 255, 100, 0.15);
+          border: 1px solid rgba(100, 255, 100, 0.3);
+          border-radius: 8px;
+          padding: 10px;
+          margin-top: 10px;
+        }
+
+        .lab-capture-title {
+          font-size: 11px;
+          color: #66ff66;
+          text-transform: uppercase;
+          margin-bottom: 8px;
+        }
+
+        .lab-capture-unit {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 5px 0;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .lab-capture-unit:last-child {
+          border-bottom: none;
+        }
+
+        .lab-capture-unit-name {
+          font-weight: bold;
+          color: #fff;
+        }
+
+        .lab-capture-target-count {
+          font-size: 12px;
+          color: #66ff66;
+          margin-top: 8px;
+          text-align: center;
+        }
+
+        /* Transport context panel */
+        .lab-transport-panel {
+          background: rgba(255, 200, 100, 0.15);
+          border: 1px solid rgba(255, 200, 100, 0.3);
+          border-radius: 8px;
+          padding: 10px;
+          margin-top: 10px;
+        }
+
+        .lab-transport-title {
+          font-size: 11px;
+          color: #ffcc66;
+          text-transform: uppercase;
+          margin-bottom: 8px;
+        }
+
+        .lab-transport-cargo {
+          margin-bottom: 10px;
+        }
+
+        .lab-transport-cargo-title {
+          font-size: 10px;
+          color: #888;
+          margin-bottom: 5px;
+        }
+
+        .lab-transport-cargo-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 5px 8px;
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 4px;
+          margin-bottom: 4px;
+        }
+
+        .lab-transport-cargo-name {
+          font-size: 12px;
+          color: #fff;
+        }
+
+        .lab-transport-btn {
+          padding: 6px 12px;
+          border: none;
+          border-radius: 4px;
+          font-size: 11px;
+          font-weight: bold;
+          cursor: pointer;
+          transition: all 0.2s;
+          min-height: 32px;
+        }
+
+        .lab-load-btn {
+          background: #4a90e2;
+          color: #fff;
+          width: 100%;
+          margin-bottom: 5px;
+        }
+
+        .lab-load-btn:hover {
+          background: #357abd;
+        }
+
+        .lab-load-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .lab-unload-btn {
+          background: #e94560;
+          color: #fff;
+          font-size: 10px;
+          padding: 4px 8px;
+        }
+
+        .lab-unload-btn:hover {
+          background: #c73a54;
+        }
+
+        .lab-no-cargo {
+          font-size: 12px;
+          color: #666;
+          text-align: center;
+          padding: 10px;
+        }
+
+        .lab-adjacent-minerals {
+          margin-top: 10px;
+          padding-top: 10px;
+          border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .lab-adjacent-minerals-title {
+          font-size: 10px;
+          color: #888;
+          margin-bottom: 5px;
+        }
       </style>
 
       <div class="lab-title">Lab Mode</div>
+
+      <div class="lab-section">
+        <div class="lab-section-title">Mode</div>
+        <div class="lab-mode-selector">
+          <button class="lab-mode-btn ${this.mode === 'setup' ? 'active' : ''}" data-mode="setup">Setup</button>
+          <button class="lab-mode-btn ${this.mode === 'play' ? 'active' : ''}" data-mode="play">Play</button>
+        </div>
+        ${this.mode === 'play' ? `
+        <div class="lab-submode-selector">
+          <button class="lab-submode-btn move ${this.playSubMode === 'move' ? 'active' : ''}" data-submode="move">🚗 Move</button>
+          <button class="lab-submode-btn combat ${this.playSubMode === 'combat' ? 'active' : ''}" data-submode="combat">🎯 Combat</button>
+          <button class="lab-submode-btn capture ${this.playSubMode === 'capture' ? 'active' : ''}" data-submode="capture">🤝 Capture</button>
+        </div>
+        ` : ''}
+      </div>
 
       <div class="lab-section">
         <div class="lab-section-title">Active Team</div>
@@ -436,14 +1389,77 @@ export class LabMode {
       </div>
 
       <div class="lab-section">
+        ${this.mode === 'play' ? `
+        <button class="lab-action-btn lab-end-turn-btn" id="lab-end-turn-btn">End Turn (Reset AP & Shots)</button>
+        ` : ''}
         <button class="lab-action-btn lab-reset-btn" id="lab-reset-btn">Reset All Units</button>
         <button class="lab-action-btn lab-back-btn" id="lab-back-btn">Back to Home</button>
       </div>
 
-      <div class="lab-info">
-        Click on map to place selected unit<br>
-        Right-click to remove unit
+      <div class="lab-info" id="lab-mode-info">
+        ${this.mode === 'setup'
+          ? `Tap map to place unit<br>Tap again or press R to rotate<br>Long-press to remove`
+          : this.playSubMode === 'combat'
+            ? `Select 2 combat units<br>Tap red target to fire<br>Cost: 2 AP (max 2 shots/unit)`
+            : this.playSubMode === 'capture'
+              ? `Select 2 combat units<br>Tap green target to capture<br>Cost: 1 AP (both adjacent, free from fire)`
+              : `Tap unit to select<br>Tap destination to move<br>AP cost shown on path`}
       </div>
+
+      ${this.selectedUnit ? `
+      <div class="lab-selected-unit">
+        <div class="lab-selected-unit-title">Selected for Placement</div>
+        <div class="lab-selected-unit-name">${this.selectedUnit.type}</div>
+        <div class="lab-selected-unit-rotation">Rotation: ${(this.selectedUnit.rotation || 0) * 60} degrees</div>
+        <button class="lab-rotate-btn" id="lab-rotate-btn">Rotate (R)</button>
+      </div>
+      ` : ''}
+
+      ${this.selectedMapUnit ? `
+      <div class="lab-selected-unit">
+        <div class="lab-selected-unit-title">Selected Unit</div>
+        <div class="lab-selected-unit-name">${this.selectedMapUnit.type}</div>
+        <div class="lab-selected-unit-rotation">Move cost: ${getMovementCost(this.selectedMapUnit.type)} AP/hex</div>
+      </div>
+      ${isTransporter(this.selectedMapUnit.type) ? this.renderTransportPanel(this.selectedMapUnit) : ''}
+      ` : ''}
+
+      ${this.mode === 'play' && this.playSubMode === 'combat' && this.selectedCombatUnits.length > 0 ? `
+      <div class="lab-combat-selection">
+        <div class="lab-combat-title">Combat Units (${this.selectedCombatUnits.length}/2)</div>
+        ${this.selectedCombatUnits.map((unit) => `
+        <div class="lab-combat-unit">
+          <span class="lab-combat-unit-name">${unit.type}</span>
+          <span class="lab-combat-unit-shots">${unit.shotsRemaining} shots left</span>
+        </div>
+        `).join('')}
+        ${this.selectedCombatUnits.length === 2 ? `
+        <div class="lab-target-count">
+          ${this.validTargets.length > 0
+            ? `${this.validTargets.length} target${this.validTargets.length > 1 ? 's' : ''} in range`
+            : 'No targets in range'}
+        </div>
+        ` : ''}
+      </div>
+      ` : ''}
+
+      ${this.mode === 'play' && this.playSubMode === 'capture' && this.selectedCaptureUnits.length > 0 ? `
+      <div class="lab-capture-selection">
+        <div class="lab-capture-title">Capture Units (${this.selectedCaptureUnits.length}/2)</div>
+        ${this.selectedCaptureUnits.map((unit) => `
+        <div class="lab-capture-unit">
+          <span class="lab-capture-unit-name">${unit.type}</span>
+        </div>
+        `).join('')}
+        ${this.selectedCaptureUnits.length === 2 ? `
+        <div class="lab-capture-target-count">
+          ${this.captureTargets.length > 0
+            ? `${this.captureTargets.length} target${this.captureTargets.length > 1 ? 's' : ''} can be captured`
+            : 'No valid capture targets'}
+        </div>
+        ` : ''}
+      </div>
+      ` : ''}
     `;
 
     document.body.appendChild(this.controlPanel);
@@ -453,10 +1469,226 @@ export class LabMode {
   }
 
   /**
+   * Render the transport panel for a transporter unit
+   */
+  private renderTransportPanel(unit: Unit): string {
+    const cargo = unit.cargo ?? [];
+    const capacity = getCargoCapacity(unit.type);
+    const adjacentMinerals = this.getAdjacentMinerals(unit);
+
+    return `
+      <div class="lab-transport-panel">
+        <div class="lab-transport-title">Transport (${cargo.length}/${capacity} slots)</div>
+
+        <div class="lab-transport-cargo">
+          <div class="lab-transport-cargo-title">Cargo:</div>
+          ${cargo.length === 0 ? `
+            <div class="lab-no-cargo">Empty</div>
+          ` : cargo.map(cargoId => `
+            <div class="lab-transport-cargo-item">
+              <span class="lab-transport-cargo-name">${this.getCargoDisplayName(cargoId)}</span>
+              <button class="lab-transport-btn lab-unload-btn" data-cargo-id="${cargoId}">Unload</button>
+            </div>
+          `).join('')}
+        </div>
+
+        ${adjacentMinerals.length > 0 && cargo.length < capacity ? `
+        <div class="lab-adjacent-minerals">
+          <div class="lab-adjacent-minerals-title">Adjacent Minerals:</div>
+          ${adjacentMinerals.map(mineral => `
+            <button class="lab-transport-btn lab-load-btn" data-mineral-id="${mineral.id}">
+              Load Mineral (1 AP)
+            </button>
+          `).join('')}
+        </div>
+        ` : ''}
+
+        ${cargo.length >= capacity ? `
+        <div class="lab-no-cargo">Cargo full</div>
+        ` : adjacentMinerals.length === 0 ? `
+        <div class="lab-no-cargo">No minerals nearby</div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  /**
+   * Get minerals adjacent to a unit
+   */
+  private getAdjacentMinerals(unit: Unit): Mineral[] {
+    if (!unit.position) return [];
+
+    const neighbors = hexNeighbors(unit.position);
+    return this.gameState.minerals.filter(mineral =>
+      neighbors.some(n => n.q === mineral.position.q && n.r === mineral.position.r)
+    );
+  }
+
+  /**
+   * Get display name for cargo item (mineral or unit)
+   */
+  private getCargoDisplayName(cargoId: string): string {
+    // Check if it's a mineral
+    const mineral = this.gameState.minerals.find(m => m.id === cargoId);
+    if (mineral) return `Mineral`;
+
+    // Check if it's a unit
+    const unit = this.gameState.units.find(u => u.id === cargoId);
+    if (unit) return unit.type;
+
+    return cargoId;
+  }
+
+  /**
+   * Handle loading a mineral into a transporter
+   */
+  private handleLoadMineral(mineralId: string): void {
+    if (!this.selectedMapUnit) return;
+
+    const validation = validateLoadAction(this.gameState, this.selectedMapUnit.id, mineralId);
+    if (!validation.valid || validation.apCost === undefined) {
+      console.log('Load failed:', validation.error);
+      return;
+    }
+
+    const apCost = validation.apCost;
+
+    // Check AP
+    if (this.gameState.actionPoints < apCost) {
+      console.log('Not enough AP');
+      return;
+    }
+
+    // Apply the load action
+    const action = {
+      type: 'LOAD' as const,
+      playerId: this.gameState.currentPlayer,
+      timestamp: Date.now(),
+      transporterId: this.selectedMapUnit.id,
+      cargoId: mineralId,
+      apCost: apCost,
+    };
+
+    this.gameState = applyLoadAction(this.gameState, action);
+    // Note: applyLoadAction already deducts AP
+
+    // Refresh selectedMapUnit reference to updated unit
+    this.selectedMapUnit = this.gameState.units.find(u => u.id === this.selectedMapUnit!.id) ?? null;
+
+    // Update renderer
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+    if (this.renderer?.setMinerals) {
+      this.renderer.setMinerals(this.gameState.minerals);
+    }
+
+    this.updateAPDisplay();
+    this.updateControlPanel();
+    console.log('Loaded mineral into', this.selectedMapUnit?.type);
+  }
+
+  /**
+   * Handle unloading cargo from a transporter
+   */
+  private handleUnloadCargo(cargoId: string): void {
+    if (!this.selectedMapUnit || !this.selectedMapUnit.position) return;
+
+    // Find an adjacent empty hex for unloading
+    const neighbors = hexNeighbors(this.selectedMapUnit.position);
+    const occupiedHexes = getOccupiedHexes(this.gameState.units.filter(u => u.position !== null));
+    const terrainGetter = this.getTerrainGetter();
+
+    // Find valid unload destination (land hex that's not occupied)
+    let destination: HexCoord | null = null;
+    for (const neighbor of neighbors) {
+      const terrain = terrainGetter(neighbor);
+      const isOccupied = occupiedHexes.has(hexKey(neighbor));
+      if (terrain === TerrainType.Land && !isOccupied) {
+        destination = neighbor;
+        break;
+      }
+    }
+
+    if (!destination) {
+      console.log('No valid unload destination');
+      return;
+    }
+
+    const validation = validateUnloadAction(this.gameState, this.selectedMapUnit.id, cargoId, destination);
+    if (!validation.valid || validation.apCost === undefined) {
+      console.log('Unload failed:', validation.error);
+      return;
+    }
+
+    const apCost = validation.apCost;
+
+    // Check AP
+    if (this.gameState.actionPoints < apCost) {
+      console.log('Not enough AP');
+      return;
+    }
+
+    // Apply the unload action
+    const action = {
+      type: 'UNLOAD' as const,
+      playerId: this.gameState.currentPlayer,
+      timestamp: Date.now(),
+      transporterId: this.selectedMapUnit.id,
+      cargoId: cargoId,
+      destination: destination,
+      apCost: apCost,
+    };
+
+    this.gameState = applyUnloadAction(this.gameState, action);
+    // Note: applyUnloadAction already deducts AP
+
+    // Refresh selectedMapUnit reference to updated unit
+    this.selectedMapUnit = this.gameState.units.find(u => u.id === this.selectedMapUnit!.id) ?? null;
+
+    // Update renderer
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+    if (this.renderer?.setMinerals) {
+      this.renderer.setMinerals(this.gameState.minerals);
+    }
+
+    this.updateAPDisplay();
+    this.updateControlPanel();
+    console.log('Unloaded cargo to', destination);
+  }
+
+  /**
    * Set up control panel event handlers
    */
   private setupControlPanelEvents(): void {
     if (!this.controlPanel) return;
+
+    // Mode selection
+    this.controlPanel.querySelectorAll('.lab-mode-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const mode = (e.target as HTMLElement).dataset.mode as LabModeType;
+        this.switchMode(mode);
+      });
+    });
+
+    // Play sub-mode selection (move vs combat)
+    this.controlPanel.querySelectorAll('.lab-submode-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const subMode = (e.target as HTMLElement).dataset.submode as PlaySubMode;
+        this.switchPlaySubMode(subMode);
+      });
+    });
+
+    // Rotate button
+    const rotateBtn = document.getElementById('lab-rotate-btn');
+    if (rotateBtn) {
+      rotateBtn.addEventListener('click', () => {
+        this.rotateSelectedUnit();
+        this.updateControlPanel();
+      });
+    }
 
     // Team selection
     this.controlPanel.querySelectorAll('.lab-team-btn').forEach(btn => {
@@ -484,6 +1716,11 @@ export class LabMode {
       });
     });
 
+    // End Turn button
+    document.getElementById('lab-end-turn-btn')?.addEventListener('click', () => {
+      this.endTurn();
+    });
+
     // Reset button
     document.getElementById('lab-reset-btn')?.addEventListener('click', () => {
       this.resetAllUnits();
@@ -492,6 +1729,26 @@ export class LabMode {
     // Back button
     document.getElementById('lab-back-btn')?.addEventListener('click', () => {
       window.location.href = '/';
+    });
+
+    // Load mineral buttons
+    this.controlPanel.querySelectorAll('.lab-load-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const mineralId = (e.target as HTMLElement).dataset.mineralId;
+        if (mineralId) {
+          this.handleLoadMineral(mineralId);
+        }
+      });
+    });
+
+    // Unload cargo buttons
+    this.controlPanel.querySelectorAll('.lab-unload-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const cargoId = (e.target as HTMLElement).dataset.cargoId;
+        if (cargoId) {
+          this.handleUnloadCargo(cargoId);
+        }
+      });
     });
   }
 
@@ -508,6 +1765,7 @@ export class LabMode {
     const ownerWithColor = `${currentOwnerId}-${currentColor}`;
 
     this.deploymentInventory = new DeploymentInventory({
+      playerId: ownerWithColor,
       playerColor: currentColor,
       onUnitSelect: (unitType: UnitType, unitId: string) => {
         const unit = this.gameState.units.find(u => u.id === unitId);
@@ -531,19 +1789,82 @@ export class LabMode {
   }
 
   /**
+   * Switch between setup and play modes
+   */
+  private switchMode(mode: LabModeType): void {
+    if (this.mode === mode) return;
+
+    this.mode = mode;
+    this.playSubMode = 'move'; // Reset to move sub-mode
+    this.selectedUnit = null;
+    this.selectedMapUnit = null;
+    this.movementPreview = [];
+    this.clearCombatSelection();
+    this.clearHighlights();
+
+    // Update UI buttons
+    this.controlPanel?.querySelectorAll('.lab-mode-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
+    });
+
+    // Show/hide deployment inventory based on mode
+    if (mode === 'setup') {
+      this.createDeploymentInventory();
+    } else {
+      this.deploymentInventory?.hide();
+    }
+
+    // Update control panel to reflect mode change
+    this.updateControlPanel();
+
+    console.log('Switched to mode:', mode);
+  }
+
+  /**
+   * Update the control panel UI (refresh dynamic content)
+   */
+  private updateControlPanel(): void {
+    // Update info text
+    const infoEl = document.getElementById('lab-mode-info');
+    if (infoEl) {
+      infoEl.innerHTML = this.mode === 'setup'
+        ? `Tap map to place unit<br>Tap again or press R to rotate<br>Long-press to remove`
+        : this.playSubMode === 'combat'
+          ? `Select 2 combat units<br>Tap red target to fire<br>Cost: 2 AP (max 2 shots/unit)`
+          : this.playSubMode === 'capture'
+            ? `Select 2 combat units<br>Tap green target to capture<br>Cost: 1 AP (both adjacent, free from fire)`
+            : `Tap unit to select<br>Tap destination to move<br>AP cost shown on path`;
+    }
+
+    // Recreate the control panel to update selected unit display
+    if (this.controlPanel) {
+      this.controlPanel.remove();
+      this.createControlPanel();
+    }
+  }
+
+  /**
    * Switch active team
    */
   private switchTeam(team: 'team1' | 'team2'): void {
     this.currentTeam = team;
     this.selectedUnit = null;
+    this.selectedMapUnit = null;
+
+    // Update currentPlayer to match unit owner format
+    const teamId = team === 'team1' ? 'lab-team1' : 'lab-team2';
+    const color = team === 'team1' ? this.config.team1Color : this.config.team2Color;
+    this.gameState.currentPlayer = `${teamId}-${color}`;
 
     // Update UI
     this.controlPanel?.querySelectorAll('.lab-team-btn').forEach(btn => {
       btn.classList.toggle('active', btn.getAttribute('data-team') === team);
     });
 
-    // Recreate deployment inventory for new team
-    this.createDeploymentInventory();
+    // Recreate deployment inventory for new team (only in setup mode)
+    if (this.mode === 'setup') {
+      this.createDeploymentInventory();
+    }
   }
 
   /**
@@ -560,6 +1881,26 @@ export class LabMode {
   private resetAP(): void {
     this.gameState.actionPoints = 15;
     this.updateAPDisplay();
+  }
+
+  /**
+   * End turn - reset AP and shots for all units
+   */
+  private endTurn(): void {
+    // Reset AP to starting value
+    this.gameState.actionPoints = GAME_CONSTANTS.BASE_AP;
+
+    // Reset shots for all units
+    this.resetTurnShots();
+
+    // Clear any selections
+    this.deselectMapUnit();
+
+    // Update UI
+    this.updateAPDisplay();
+    this.updateControlPanel();
+
+    console.log('Turn ended - AP and shots reset');
   }
 
   /**
@@ -606,9 +1947,30 @@ export class LabMode {
   }
 
   /**
-   * Handle hex click
+   * Handle hex click - routes to setup or play mode handler
    */
   private handleHexClick(coord: HexCoord): void {
+    if (this.mode === 'setup') {
+      this.handleSetupHexClick(coord);
+    } else {
+      this.handlePlayHexClick(coord);
+    }
+  }
+
+  /**
+   * Handle hex click in setup mode - place or rotate units
+   */
+  private handleSetupHexClick(coord: HexCoord): void {
+    // Check if clicking on an already placed unit to rotate it
+    const clickedUnit = this.findUnitAtHex(coord);
+    if (clickedUnit && clickedUnit.owner.includes(this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color)) {
+      // Select the clicked unit for rotation
+      this.selectedUnit = clickedUnit;
+      this.rotateSelectedUnit();
+      this.updateControlPanel();
+      return;
+    }
+
     if (!this.selectedUnit) return;
 
     // Get all currently occupied hexes (excluding the unit being placed)
@@ -617,11 +1979,27 @@ export class LabMode {
     );
     const occupiedHexes = getOccupiedHexes(otherUnits);
 
-    // Check if placement is valid for multi-hex units
+    // Check if placement is valid for multi-hex units (overlap + terrain)
     const rotation = this.selectedUnit.rotation || 0;
-    if (!isPlacementValid(this.selectedUnit.type, coord, rotation, occupiedHexes)) {
-      console.log('Invalid placement - would overlap with existing units');
+    const terrainGetter = this.getTerrainGetter();
+    if (!isPlacementValidWithTerrain(
+      this.selectedUnit.type,
+      coord,
+      rotation,
+      occupiedHexes,
+      terrainGetter,
+      this.gameState.currentTide
+    )) {
+      console.log('Invalid placement - overlap with units or incompatible terrain');
       return;
+    }
+
+    // Special validation for turrets - must be placed on astronef pode hexes
+    if (this.selectedUnit.type === UnitType.Tower) {
+      if (!isTurretPlacementValid(coord, this.selectedUnit.owner, this.gameState.units)) {
+        console.log('Invalid turret placement - must be on astronef pode hex');
+        return;
+      }
     }
 
     // Place the unit
@@ -642,7 +2020,287 @@ export class LabMode {
     // Update deployment inventory
     this.createDeploymentInventory();
     this.selectedUnit = null;
+    this.updateControlPanel();
     this.render();
+  }
+
+  /**
+   * Handle hex click in play mode - select units or move them
+   */
+  private handlePlayHexClick(coord: HexCoord): void {
+    if (this.playSubMode === 'combat') {
+      this.handleCombatHexClick(coord);
+    } else if (this.playSubMode === 'capture') {
+      this.handleCaptureHexClick(coord);
+    } else {
+      this.handleMoveHexClick(coord);
+    }
+  }
+
+  /**
+   * Handle hex click in move sub-mode
+   */
+  private handleMoveHexClick(coord: HexCoord): void {
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+
+    // If no unit selected, try to select one
+    if (!this.selectedMapUnit) {
+      const clickedUnit = this.findUnitAtHex(coord);
+      if (clickedUnit && clickedUnit.owner.includes(currentColor)) {
+        // Check if unit can move
+        const moveCost = getMovementCost(clickedUnit.type);
+        if (moveCost === Infinity) {
+          console.log('This unit cannot move');
+          return;
+        }
+
+        this.selectedMapUnit = clickedUnit;
+        console.log('Selected unit for movement:', clickedUnit.type);
+
+        // Show reachable hexes
+        this.showReachableHexes(clickedUnit);
+
+        this.updateControlPanel();
+      }
+      return;
+    }
+
+    // Unit is selected, try to move it
+    const moveCost = getMovementCost(this.selectedMapUnit.type);
+
+    // Check if clicking on the same unit to deselect
+    const clickedUnit = this.findUnitAtHex(coord);
+    if (clickedUnit && clickedUnit.id === this.selectedMapUnit.id) {
+      this.deselectMapUnit();
+      this.updateControlPanel();
+      return;
+    }
+
+    // Get start position and validate
+    const startPos = this.selectedMapUnit.position;
+    if (!startPos) return;
+
+    // Get occupied hexes (excluding the moving unit)
+    const occupiedHexes = getOccupiedHexes(
+      this.gameState.units.filter(u => u.id !== this.selectedMapUnit!.id && u.position !== null)
+    );
+
+    // Use pathfinding to find valid path
+    const terrainGetter = this.getTerrainGetter();
+    const path = findPath(
+      startPos,
+      coord,
+      this.selectedMapUnit.type,
+      terrainGetter,
+      this.gameState.currentTide,
+      occupiedHexes
+    );
+
+    if (!path || path.length <= 1) {
+      console.log('No valid path to destination');
+      return;
+    }
+
+    // Calculate AP cost based on path length
+    const totalAPCost = (path.length - 1) * moveCost;
+
+    // Check if we have enough AP
+    if (totalAPCost > this.gameState.actionPoints) {
+      console.log(`Not enough AP. Need ${totalAPCost}, have ${this.gameState.actionPoints}`);
+      return;
+    }
+
+    // Move the unit
+    console.log(`Moving ${this.selectedMapUnit.type} from (${startPos.q},${startPos.r}) to (${coord.q},${coord.r}), cost: ${totalAPCost} AP, path length: ${path.length}`);
+    this.selectedMapUnit.position = coord;
+    this.gameState.actionPoints -= totalAPCost;
+
+    // Update renderer and UI
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+    this.updateAPDisplay();
+    this.deselectMapUnit();
+    this.updateControlPanel();
+    this.render();
+  }
+
+  /**
+   * Show reachable hexes for a unit based on available AP
+   */
+  private showReachableHexes(unit: Unit): void {
+    if (!unit.position) return;
+
+    // Get occupied hexes (excluding this unit)
+    const occupiedHexes = getOccupiedHexes(
+      this.gameState.units.filter(u => u.id !== unit.id && u.position !== null)
+    );
+
+    // Get terrain getter
+    const terrainGetter = this.getTerrainGetter();
+
+    // Get reachable hexes within AP budget
+    const reachable = getReachableHexes(
+      unit.position,
+      unit.type,
+      this.gameState.actionPoints,
+      terrainGetter,
+      this.gameState.currentTide,
+      occupiedHexes
+    );
+
+    // Convert to array of HexCoord for highlighting
+    const reachableHexes: HexCoord[] = [];
+    for (const key of reachable.keys()) {
+      reachableHexes.push(hexFromKey(key));
+    }
+
+    // Highlight the unit's current position as selected
+    if (this.renderer?.setHighlightedHexes) {
+      this.renderer.setHighlightedHexes([unit.position], 'selected');
+    }
+
+    // Highlight reachable hexes as range
+    if (reachableHexes.length > 0 && this.renderer?.setHighlightedHexes) {
+      this.renderer.setHighlightedHexes(reachableHexes, 'range');
+    }
+
+    console.log(`Showing ${reachableHexes.length} reachable hexes for ${unit.type}`);
+  }
+
+  /**
+   * Handle hex click in combat sub-mode
+   */
+  private handleCombatHexClick(coord: HexCoord): void {
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+    const clickedUnit = this.findUnitAtHex(coord);
+
+    if (!clickedUnit) {
+      // Clicked on empty hex - clear selection
+      if (this.selectedCombatUnits.length > 0) {
+        this.clearCombatSelection();
+        this.updateControlPanel();
+      }
+      return;
+    }
+
+    // Check if clicking on a valid target (enemy in range of both selected units)
+    if (this.selectedCombatUnits.length === 2) {
+      const isTarget = this.validTargets.some((t) => t.id === clickedUnit.id);
+      if (isTarget) {
+        this.executeFireAction(clickedUnit);
+        return;
+      }
+    }
+
+    // Check if clicking on own unit to select/deselect for combat
+    if (clickedUnit.owner.includes(currentColor)) {
+      this.selectCombatUnit(clickedUnit);
+    } else {
+      // Clicked on enemy but not a valid target
+      console.log('Enemy unit is not in range of both selected units');
+    }
+  }
+
+  /**
+   * Handle hex click in capture sub-mode
+   */
+  private handleCaptureHexClick(coord: HexCoord): void {
+    const currentColor = this.currentTeam === 'team1' ? this.config.team1Color : this.config.team2Color;
+    const clickedUnit = this.findUnitAtHex(coord);
+
+    if (!clickedUnit) {
+      // Clicked on empty hex - clear selection
+      if (this.selectedCaptureUnits.length > 0) {
+        this.clearCaptureSelection();
+        this.updateControlPanel();
+      }
+      return;
+    }
+
+    // Check if clicking on a valid capture target (enemy adjacent to both selected units)
+    if (this.selectedCaptureUnits.length === 2) {
+      const isTarget = this.captureTargets.some((t) => t.id === clickedUnit.id);
+      if (isTarget) {
+        this.executeCaptureAction(clickedUnit);
+        return;
+      }
+    }
+
+    // Check if clicking on own unit to select/deselect for capture
+    if (clickedUnit.owner.includes(currentColor)) {
+      this.selectCaptureUnit(clickedUnit);
+    } else {
+      // Clicked on enemy but not a valid target
+      console.log('Enemy unit is not adjacent to both selected units or under enemy fire');
+    }
+  }
+
+  /**
+   * Switch play sub-mode (move vs combat vs capture)
+   */
+  private switchPlaySubMode(subMode: PlaySubMode): void {
+    if (this.playSubMode === subMode) return;
+
+    this.playSubMode = subMode;
+    this.selectedMapUnit = null;
+    this.clearCombatSelection();
+    this.clearCaptureSelection();
+
+    // Update UI
+    this.controlPanel?.querySelectorAll('.lab-submode-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-submode') === subMode);
+    });
+
+    // Show appropriate highlights when entering each mode
+    if (subMode === 'combat') {
+      this.showAllCombatRanges();
+    } else if (subMode === 'capture') {
+      this.showAllCaptureZones();
+    } else {
+      this.renderer?.clearHighlights?.();
+    }
+
+    this.updateControlPanel();
+    console.log('Switched to play sub-mode:', subMode);
+  }
+
+  /**
+   * Find a unit occupying the given hex
+   */
+  private findUnitAtHex(coord: HexCoord): Unit | null {
+    for (const unit of this.gameState.units) {
+      if (!unit.position) continue;
+      const footprint = getUnitFootprint(unit.type, unit.position, unit.rotation || 0);
+      if (footprint.some(h => h.q === coord.q && h.r === coord.r)) {
+        return unit;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Calculate hex distance (simple Manhattan-style for hex grid)
+   */
+  private hexDistance(a: HexCoord, b: HexCoord): number {
+    // Using axial distance formula
+    return Math.max(
+      Math.abs(a.q - b.q),
+      Math.abs(a.r - b.r),
+      Math.abs((a.q + a.r) - (b.q + b.r))
+    );
+  }
+
+  /**
+   * Get terrain getter function for combat calculations
+   */
+  private getTerrainGetter(): TerrainGetter {
+    return (coord: HexCoord): TerrainType => {
+      const terrain = this.gameState.terrain.find(
+        (t) => t.coord.q === coord.q && t.coord.r === coord.r
+      );
+      return terrain?.type ?? TerrainType.Land;
+    };
   }
 
   /**

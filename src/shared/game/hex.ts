@@ -5,8 +5,9 @@
  * neighbor finding, and range utilities for flat-top hexagonal grids.
  */
 
-import type { HexCoord, CubeCoord, UnitType } from './types';
-import { UNIT_SHAPES } from './types';
+import { TideLevel, UnitType, type HexCoord, type CubeCoord, type TerrainType } from './types';
+import { UNIT_SHAPES, UNIT_PROPERTIES } from './types';
+import { canUnitEnterTerrain, canAstronefLandOn } from './terrain';
 
 // ============================================================================
 // Flat-Top Hex Directions
@@ -280,6 +281,196 @@ export function hexRotateAround(hex: HexCoord, center: HexCoord, steps: number):
 }
 
 // ============================================================================
+// Pathfinding
+// ============================================================================
+
+/**
+ * Type for terrain getter function used in pathfinding.
+ */
+export type PathTerrainGetter = (coord: HexCoord) => TerrainType;
+
+/**
+ * Find the shortest valid path between two hexes for a unit type.
+ * Uses A* algorithm with terrain and obstacle validation.
+ *
+ * @param start - Starting hex coordinate
+ * @param end - Target hex coordinate
+ * @param unitType - Type of unit moving
+ * @param getTerrainAt - Function to get terrain at a coordinate
+ * @param tide - Current tide level
+ * @param occupiedHexes - Set of hex keys that are occupied
+ * @returns Array of hex coordinates forming the path (including start and end), or null if no path exists
+ */
+export function findPath(
+  start: HexCoord,
+  end: HexCoord,
+  unitType: UnitType,
+  getTerrainAt: PathTerrainGetter,
+  tide: TideLevel,
+  occupiedHexes: Set<string>
+): HexCoord[] | null {
+  // Check if unit can move at all
+  const moveCost = UNIT_PROPERTIES[unitType].movementCost;
+  if (!isFinite(moveCost)) {
+    return null;
+  }
+
+  // Check if destination is valid terrain
+  if (!canUnitEnterTerrain(unitType, getTerrainAt(end), tide)) {
+    return null;
+  }
+
+  // Check if destination is occupied
+  if (occupiedHexes.has(hexKey(end))) {
+    return null;
+  }
+
+  // A* algorithm
+  const startKey = hexKey(start);
+  const endKey = hexKey(end);
+
+  if (startKey === endKey) {
+    return [start];
+  }
+
+  const openSet = new Map<string, { hex: HexCoord; f: number; g: number }>();
+  const closedSet = new Set<string>();
+  const cameFrom = new Map<string, string>();
+
+  const heuristic = (a: HexCoord, b: HexCoord) => hexDistance(a, b);
+
+  openSet.set(startKey, { hex: start, f: heuristic(start, end), g: 0 });
+
+  while (openSet.size > 0) {
+    // Find node with lowest f score
+    let current: { hex: HexCoord; f: number; g: number } | null = null;
+    let currentKey = '';
+    for (const [key, node] of openSet) {
+      if (!current || node.f < current.f) {
+        current = node;
+        currentKey = key;
+      }
+    }
+
+    if (!current) break;
+
+    // Check if we reached the goal
+    if (currentKey === endKey) {
+      // Reconstruct path
+      const path: HexCoord[] = [current.hex];
+      let pathKey = currentKey;
+      while (cameFrom.has(pathKey)) {
+        pathKey = cameFrom.get(pathKey)!;
+        path.unshift(hexFromKey(pathKey));
+      }
+      return path;
+    }
+
+    openSet.delete(currentKey);
+    closedSet.add(currentKey);
+
+    // Check all neighbors
+    for (const neighbor of hexNeighbors(current.hex)) {
+      const neighborKey = hexKey(neighbor);
+
+      // Skip if already evaluated
+      if (closedSet.has(neighborKey)) continue;
+
+      // Skip if occupied (except destination which is already validated)
+      if (neighborKey !== endKey && occupiedHexes.has(neighborKey)) continue;
+
+      // Skip if unit can't enter this terrain
+      if (!canUnitEnterTerrain(unitType, getTerrainAt(neighbor), tide)) continue;
+
+      const tentativeG = current.g + 1; // Each step costs 1 in terms of path length
+
+      const existing = openSet.get(neighborKey);
+      if (!existing || tentativeG < existing.g) {
+        cameFrom.set(neighborKey, currentKey);
+        const f = tentativeG + heuristic(neighbor, end);
+        openSet.set(neighborKey, { hex: neighbor, f, g: tentativeG });
+      }
+    }
+  }
+
+  // No path found
+  return null;
+}
+
+/**
+ * Get all hexes reachable by a unit within a given AP budget.
+ * Uses BFS to explore all valid paths.
+ *
+ * @param start - Starting hex coordinate
+ * @param unitType - Type of unit moving
+ * @param maxAP - Maximum action points available
+ * @param getTerrainAt - Function to get terrain at a coordinate
+ * @param tide - Current tide level
+ * @param occupiedHexes - Set of hex keys that are occupied
+ * @returns Map of reachable hex keys to their minimum AP cost
+ */
+export function getReachableHexes(
+  start: HexCoord,
+  unitType: UnitType,
+  maxAP: number,
+  getTerrainAt: PathTerrainGetter,
+  tide: TideLevel,
+  occupiedHexes: Set<string>
+): Map<string, number> {
+  const moveCost = UNIT_PROPERTIES[unitType].movementCost;
+  if (!isFinite(moveCost)) {
+    return new Map();
+  }
+
+  const maxSteps = Math.floor(maxAP / moveCost);
+  if (maxSteps <= 0) {
+    return new Map();
+  }
+
+  const reachable = new Map<string, number>();
+  const startKey = hexKey(start);
+
+  // BFS with cost tracking
+  const queue: Array<{ hex: HexCoord; steps: number }> = [{ hex: start, steps: 0 }];
+  const visited = new Map<string, number>(); // key -> min steps to reach
+  visited.set(startKey, 0);
+
+  while (queue.length > 0) {
+    const { hex, steps } = queue.shift()!;
+    const key = hexKey(hex);
+
+    // Add to reachable if not the start position
+    if (key !== startKey) {
+      reachable.set(key, steps * moveCost);
+    }
+
+    // Check neighbors if we haven't exceeded max steps
+    if (steps < maxSteps) {
+      for (const neighbor of hexNeighbors(hex)) {
+        const neighborKey = hexKey(neighbor);
+        const neighborSteps = steps + 1;
+
+        // Skip if we've found a shorter path already
+        if (visited.has(neighborKey) && visited.get(neighborKey)! <= neighborSteps) {
+          continue;
+        }
+
+        // Skip if occupied
+        if (occupiedHexes.has(neighborKey)) continue;
+
+        // Skip if unit can't enter this terrain
+        if (!canUnitEnterTerrain(unitType, getTerrainAt(neighbor), tide)) continue;
+
+        visited.set(neighborKey, neighborSteps);
+        queue.push({ hex: neighbor, steps: neighborSteps });
+      }
+    }
+  }
+
+  return reachable;
+}
+
+// ============================================================================
 // Multi-Hex Unit Footprint
 // ============================================================================
 
@@ -346,6 +537,119 @@ export function isPlacementValid(
   }
 
   return true;
+}
+
+/**
+ * Check if a unit placement is valid including terrain validation.
+ *
+ * Validates:
+ * - No overlapping hexes with existing units
+ * - Unit domain matches terrain (land units on land, sea units on sea)
+ * - Astronef only on plain/marsh
+ *
+ * @param unitType - Type of unit being placed
+ * @param anchor - The anchor/position hex for the unit
+ * @param rotation - Rotation steps (0-5)
+ * @param occupiedHexes - Set of hex keys that are already occupied
+ * @param getTerrainAt - Function to get terrain type at a hex
+ * @param tide - Current tide level
+ * @returns True if placement is valid
+ */
+export function isPlacementValidWithTerrain(
+  unitType: UnitType,
+  anchor: HexCoord,
+  rotation: number,
+  occupiedHexes: Set<string>,
+  getTerrainAt: (coord: HexCoord) => TerrainType,
+  tide: TideLevel
+): boolean {
+  const footprint = getUnitFootprint(unitType, anchor, rotation);
+  const props = UNIT_PROPERTIES[unitType];
+
+  for (const hex of footprint) {
+    const key = hexKey(hex);
+
+    // Check overlap with other units
+    if (occupiedHexes.has(key)) {
+      return false;
+    }
+
+    const terrain = getTerrainAt(hex);
+
+    // Astronef has special landing rules
+    if (unitType === 'astronef') {
+      if (!canAstronefLandOn(terrain)) {
+        return false;
+      }
+      continue;
+    }
+
+    // Fixed units (turret, bridge) and inert units (mineral) don't have domain movement
+    if (props.domain === 'fixed' || props.domain === 'none') {
+      // Turrets can only be placed on astronef hexes (handled separately)
+      // Bridges can be placed on sea
+      if (unitType === 'bridge') {
+        // Bridge must be on sea terrain
+        continue;
+      }
+      continue;
+    }
+
+    // Check terrain compatibility for mobile units
+    if (!canUnitEnterTerrain(unitType, terrain, tide)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Get the astronef pode (turret) hexes for a given astronef position and rotation.
+ *
+ * @param astronefPosition - The anchor position of the astronef
+ * @param astronefRotation - The rotation of the astronef
+ * @returns Array of hex coordinates for the 3 pode positions
+ */
+export function getAstronefPodeHexes(
+  astronefPosition: HexCoord,
+  astronefRotation: number
+): HexCoord[] {
+  const footprint = getUnitFootprint(UnitType.Astronef, astronefPosition, astronefRotation);
+  // Pode positions are at indices 1, 2, 3 (index 0 is the center body)
+  return footprint.slice(1);
+}
+
+/**
+ * Check if a turret (Tower) can be placed at the given position.
+ * Turrets must be placed on an astronef's pode hexes.
+ *
+ * @param position - The position to place the turret
+ * @param ownerId - The owner ID of the turret being placed
+ * @param units - All game units to find matching astronef
+ * @returns True if the turret can be placed at this position
+ */
+export function isTurretPlacementValid(
+  position: HexCoord,
+  ownerId: string,
+  units: Array<{ type: UnitType; position: HexCoord | null; rotation?: number; owner: string }>
+): boolean {
+  // Find the player's astronef
+  const astronef = units.find(
+    (u) => u.type === UnitType.Astronef && u.owner === ownerId && u.position !== null
+  );
+
+  if (!astronef || !astronef.position) {
+    // No astronef placed yet - turrets cannot be placed
+    return false;
+  }
+
+  // Get the pode hexes
+  const podeHexes = getAstronefPodeHexes(astronef.position, astronef.rotation || 0);
+  const posKey = hexKey(position);
+
+  // Check if the target position is one of the pode hexes
+  return podeHexes.some((podeHex) => hexKey(podeHex) === posKey);
 }
 
 /**

@@ -32,7 +32,7 @@ test.describe('Two Player Game - Full Flow with Astronef Landing', () => {
 
     try {
       console.log('=== Step 1: Player 1 creates a new game ===');
-      await page1.goto('http://localhost:5174/');
+      await page1.goto('/');
 
       // Wait for home page to load
       await expect(page1.locator('h1.home-title')).toContainText('FULL METAL PLANETE');
@@ -61,7 +61,7 @@ test.describe('Two Player Game - Full Flow with Astronef Landing', () => {
       console.log('Player 1 successfully connected to the game');
 
       console.log('=== Step 2: Player 2 joins the game ===');
-      await page2.goto('http://localhost:5174/');
+      await page2.goto('/');
 
       // Wait for home page
       await expect(page2.locator('h1.home-title')).toContainText('FULL METAL PLANETE');
@@ -244,7 +244,7 @@ test.describe('Two Player Game - Full Flow with Astronef Landing', () => {
     });
 
     // Create a game
-    await page.goto('http://localhost:5174/');
+    await page.goto('/');
     await page.locator('#username-input').fill('Test Player');
     await page.locator('#create-game-btn').click();
 

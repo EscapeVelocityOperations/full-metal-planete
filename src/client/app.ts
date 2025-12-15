@@ -6,12 +6,14 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { HEX_SIZE } from '@/client/renderer/types';
 import { GameClient } from './game-client';
-import { HUD, type LobbyPlayer, type PhaseInfo } from './ui/hud';
+import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType, type GamePhase } from '@/shared/game/types';
+import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType } from '@/shared/game/types';
 import { hexKey, hexRotateAround } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
+import { canUnitEnterTerrain } from '@/shared/game/terrain';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, getWinners, setLiftOffDecision } from '@/shared/game/state';
 
 export interface GameConfig {
   gameId: string;
@@ -42,6 +44,11 @@ export class GameApp {
   // Deployment inventory UI
   private deploymentInventory: DeploymentInventory | null = null;
   private selectedDeploymentUnitId: string | null = null;
+
+  // Movement preview state
+  private movementPreviewDestination: HexCoord | null = null;
+  private movementPreviewPath: HexCoord[] = [];
+  private movementPreviewAPCost: number = 0;
 
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
@@ -146,8 +153,28 @@ export class GameApp {
       this.handleEndTurn();
     });
 
+    this.hud.onTimerExpired(() => {
+      // Auto-end turn on timeout (only if it's my turn)
+      if (this.isMyTurn) {
+        this.hud.showMessage('Time expired! Turn ended automatically.', 3000);
+        this.handleEndTurn(true); // Pass timeout flag
+      }
+    });
+
     this.hud.onReady(() => {
       this.handleReady();
+    });
+
+    this.hud.onLiftOff(() => {
+      this.handleLiftOff();
+    });
+
+    this.hud.onLoad((mineralId: string) => {
+      this.handleLoadMineral(mineralId);
+    });
+
+    this.hud.onUnload((cargoId: string, destination: HexCoord) => {
+      this.handleUnloadCargo(cargoId, destination);
     });
   }
 
@@ -418,11 +445,29 @@ export class GameApp {
     this.gameState = gameState;
     this.hud.enterGameMode();
 
+    // Set up player colors mapping for the renderer
+    this.initializePlayerColors();
+
     // Initialize deployment inventory
     this.initializeDeploymentInventory();
 
     this.updateGameState(gameState);
     this.hud.showMessage('Game started!', 3000);
+  }
+
+  /**
+   * Initialize player color mapping for the renderer
+   * Maps player IDs (e.g., "p1-abc123") to colors (e.g., "red")
+   */
+  private initializePlayerColors(): void {
+    if (!this.renderer?.setPlayerColors) return;
+
+    const playerColors: Record<string, string> = {};
+    for (const player of this.lobbyPlayers) {
+      playerColors[player.id] = player.color;
+    }
+    console.log('Setting player colors:', playerColors);
+    this.renderer.setPlayerColors(playerColors);
   }
 
   /**
@@ -433,11 +478,13 @@ export class GameApp {
       this.deploymentInventory.destroy();
     }
 
-    // Get player color from lobby players
+    // Get player info from lobby players
     const myPlayer = this.lobbyPlayers.find(p => p.id === this.client['playerId']);
+    const playerId = this.client['playerId'];
     const playerColor = myPlayer?.color || 'red';
 
     this.deploymentInventory = new DeploymentInventory({
+      playerId,
       playerColor,
       onUnitSelect: (unitType: UnitType, unitId: string) => {
         this.selectedDeploymentUnitId = unitId;
@@ -470,10 +517,24 @@ export class GameApp {
       this.hud.updateTide(gameState.currentTide);
     }
 
+    // Update tide forecast based on converter ownership
+    if (this.gameState) {
+      const playerId = this.client['playerId'];
+      const converterCount = getPlayerConverterCount(this.gameState, playerId);
+      const forecast = getTideForecast(this.gameState, playerId);
+      this.hud.updateTideForecast(forecast, converterCount);
+    }
+
     // Update units rendering
     if (this.renderer?.setUnits && this.gameState.units) {
       console.log('Updating units in renderer:', this.gameState.units.length, 'units');
       this.renderer.setUnits(this.gameState.units);
+    }
+
+    // Update minerals rendering
+    if (this.renderer?.setMinerals && this.gameState.minerals) {
+      console.log('Updating minerals in renderer:', this.gameState.minerals.length, 'minerals');
+      this.renderer.setMinerals(this.gameState.minerals);
     }
 
     if (gameState.turn !== undefined) {
@@ -491,7 +552,49 @@ export class GameApp {
     }
 
     this.checkMyTurn();
+    this.updateLiftOffUI();
     this.render();
+  }
+
+  /**
+   * Update lift-off UI elements based on current turn
+   */
+  private updateLiftOffUI(): void {
+    if (!this.gameState || !this.isMyTurn) {
+      this.hud.hideLiftOffButton();
+      this.hud.hideLiftOffDecision();
+      return;
+    }
+
+    const playerId = this.client['playerId'];
+    const player = this.gameState.players.find(p => p.id === playerId);
+
+    // Player already lifted off - no UI needed
+    if (player?.hasLiftedOff) {
+      this.hud.hideLiftOffButton();
+      this.hud.hideLiftOffDecision();
+      return;
+    }
+
+    const turn = this.gameState.turn;
+    const cost = calculateTakeOffCost(this.gameState, playerId);
+
+    // Turn 21: Show secret lift-off decision modal (once per player)
+    if (turn === 21 && !this.gameState.liftOffDecisions?.[playerId]) {
+      this.hud.showLiftOffDecision(cost, (decision) => {
+        this.handleLiftOffDecision(decision);
+      });
+    }
+
+    // Turns 21-25: Show lift-off button
+    if (turn >= 21 && turn <= 25) {
+      this.hud.showLiftOffButton(cost, this.gameState.actionPoints);
+    } else {
+      this.hud.hideLiftOffButton();
+    }
+
+    // Check for game over
+    this.checkGameOver();
   }
 
   /**
@@ -543,8 +646,9 @@ export class GameApp {
         .filter(u => {
           // A unit is deployed if it's on the map and not an astronef/tower
           if (u.type === UnitType.Astronef || u.type === UnitType.Tower) return false;
-          // Check if unit has a position (deployed) or is still in astronef (not deployed)
-          return u.position !== null;
+          // Check if unit has been deployed (position not at origin 0,0)
+          // Server initializes undeployed units at {q:0, r:0}
+          return u.position !== null && (u.position.q !== 0 || u.position.r !== 0);
         })
         .map(u => u.id);
 
@@ -585,9 +689,17 @@ export class GameApp {
 
     if (this.selectedUnit) {
       if (unit && unit.owner === this.client['playerId']) {
+        // Clicked on own unit - select it instead
+        this.clearMovementPreview();
         this.selectUnit(unit);
+      } else if (this.movementPreviewDestination &&
+                 this.movementPreviewDestination.q === coord.q &&
+                 this.movementPreviewDestination.r === coord.r) {
+        // Clicked on the previewed destination - confirm movement
+        this.confirmMovement();
       } else {
-        this.moveSelectedUnit(coord);
+        // Clicked on a new hex - show movement preview
+        this.showMovementPreview(coord);
       }
     } else if (unit && unit.owner === this.client['playerId']) {
       this.selectUnit(unit);
@@ -635,6 +747,16 @@ export class GameApp {
       return;
     }
 
+    // Validate terrain compatibility for the unit type
+    const terrainType = terrain as TerrainType;
+    const currentTide = this.gameState.currentTide || TideLevel.Normal;
+
+    if (!canUnitEnterTerrain(selectedUnit.type, terrainType, currentTide)) {
+      const unitTypeName = selectedUnit.type.charAt(0).toUpperCase() + selectedUnit.type.slice(1);
+      this.hud.showMessage(`${unitTypeName} cannot deploy on ${terrain} terrain`, 2000);
+      return;
+    }
+
     // Check if hex is occupied
     const existingUnit = this.getUnitAtHex(coord);
     if (existingUnit) {
@@ -646,7 +768,7 @@ export class GameApp {
     selectedUnit.position = coord;
     this.deploymentInventory.setDeployedUnits([
       ...this.gameState.units
-        .filter(u => u.type !== UnitType.Astronef && u.type !== UnitType.Tower && u.position !== null)
+        .filter(u => u.type !== UnitType.Astronef && u.type !== UnitType.Tower && u.position !== null && (u.position.q !== 0 || u.position.r !== 0))
         .map(u => u.id),
       selectedUnit.id,
     ]);
@@ -776,6 +898,9 @@ export class GameApp {
     this.selectedUnit = unit;
     this.hud.showMessage(`Selected ${unit.type}`, 2000);
     console.log('Selected unit:', unit);
+
+    // Show unit context panel for transporter units
+    this.showUnitContextPanel(unit);
   }
 
   /**
@@ -783,18 +908,278 @@ export class GameApp {
    */
   private deselectUnit(): void {
     if (this.selectedUnit) {
+      this.clearMovementPreview();
       this.selectedUnit = null;
+      this.hud.hideUnitActions();
       this.hud.showMessage('Unit deselected', 1000);
     }
   }
 
   /**
-   * Move selected unit to destination
+   * Show unit context action panel for a unit
+   */
+  private showUnitContextPanel(unit: Unit): void {
+    if (!this.gameState || !unit.position) return;
+
+    // Get minerals at unit's position
+    const mineralsAtPosition = this.gameState.minerals.filter(
+      m => m.position.q === unit.position!.q && m.position.r === unit.position!.r
+    );
+
+    // Get unit's cargo
+    const cargo = unit.cargo || [];
+    const cargoSlots = UNIT_PROPERTIES[unit.type].cargoSlots;
+
+    // Get adjacent hexes for dropping cargo
+    const adjacentHexes = this.getNeighbors(unit.position).filter(hex => {
+      const terrain = this.getTerrainAtHex(hex);
+      return terrain && terrain !== 'reef' && terrain !== 'swamp';
+    });
+
+    const context: UnitActionContext = {
+      unit,
+      minerals: mineralsAtPosition,
+      cargo,
+      cargoSlots,
+      adjacentHexes,
+    };
+
+    this.hud.showUnitActions(context);
+  }
+
+  /**
+   * Handle mineral load action
+   */
+  private handleLoadMineral(mineralId: string): void {
+    if (!this.selectedUnit || !this.gameState || !this.isMyTurn) return;
+
+    // Validate we have enough AP (1 AP for load)
+    if (this.gameState.actionPoints < 1) {
+      this.hud.showMessage('Not enough AP (need 1)', 2000);
+      return;
+    }
+
+    // Send load action to server
+    const action: LoadAction = {
+      type: 'LOAD',
+      playerId: this.client['playerId'],
+      transporterId: this.selectedUnit.id,
+      cargoId: mineralId,
+      apCost: 1,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+
+    // Optimistic update
+    const mineral = this.gameState.minerals.find(m => m.id === mineralId);
+    if (mineral && this.selectedUnit.cargo) {
+      this.selectedUnit.cargo.push(mineralId);
+      // Remove mineral from map
+      this.gameState.minerals = this.gameState.minerals.filter(m => m.id !== mineralId);
+    } else if (mineral) {
+      this.selectedUnit.cargo = [mineralId];
+      this.gameState.minerals = this.gameState.minerals.filter(m => m.id !== mineralId);
+    }
+
+    this.gameState.actionPoints -= 1;
+    this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Refresh unit context panel
+    this.showUnitContextPanel(this.selectedUnit);
+    this.hud.showMessage('Mineral loaded!', 1500);
+  }
+
+  /**
+   * Handle cargo unload action
+   */
+  private handleUnloadCargo(cargoId: string, destination: HexCoord): void {
+    if (!this.selectedUnit || !this.gameState || !this.isMyTurn) return;
+
+    // Validate we have enough AP (1 AP for unload)
+    if (this.gameState.actionPoints < 1) {
+      this.hud.showMessage('Not enough AP (need 1)', 2000);
+      return;
+    }
+
+    // Send unload action to server
+    const action: UnloadAction = {
+      type: 'UNLOAD',
+      playerId: this.client['playerId'],
+      transporterId: this.selectedUnit.id,
+      cargoId,
+      destination,
+      apCost: 1,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+
+    // Optimistic update - check if cargo is a mineral
+    if (cargoId.startsWith('mineral-') || cargoId.includes('mineral')) {
+      // Add mineral back to map
+      this.gameState.minerals.push({
+        id: cargoId,
+        position: destination,
+      });
+    }
+
+    // Remove from cargo
+    if (this.selectedUnit.cargo) {
+      this.selectedUnit.cargo = this.selectedUnit.cargo.filter(c => c !== cargoId);
+    }
+
+    this.gameState.actionPoints -= 1;
+    this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Refresh unit context panel
+    this.showUnitContextPanel(this.selectedUnit);
+    this.hud.showMessage('Cargo dropped!', 1500);
+  }
+
+  /**
+   * Show movement preview for a destination hex
+   * Highlights the path and shows AP cost
+   */
+  private showMovementPreview(destination: HexCoord): void {
+    if (!this.selectedUnit || !this.gameState) return;
+
+    // Validate terrain compatibility
+    const terrain = this.getTerrainAtHex(destination);
+    if (!terrain) {
+      this.hud.showMessage('Invalid destination', 2000);
+      return;
+    }
+
+    const terrainType = terrain as TerrainType;
+    const currentTide = this.gameState.currentTide || TideLevel.Normal;
+
+    if (!canUnitEnterTerrain(this.selectedUnit.type, terrainType, currentTide)) {
+      const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+      this.hud.showMessage(`${unitTypeName} cannot enter ${terrain} terrain`, 2000);
+      return;
+    }
+
+    // Check if destination is occupied
+    const existingUnit = this.getUnitAtHex(destination);
+    if (existingUnit && existingUnit.id !== this.selectedUnit.id) {
+      this.hud.showMessage('Hex is occupied', 2000);
+      return;
+    }
+
+    // Calculate path and cost
+    const path = this.calculatePath(this.selectedUnit.position!, destination);
+    const apCost = path.length - 1;
+
+    // Store preview state
+    this.movementPreviewDestination = destination;
+    this.movementPreviewPath = path;
+    this.movementPreviewAPCost = apCost;
+
+    // Clear previous highlights and show new path
+    if (this.renderer?.clearHighlights) {
+      this.renderer.clearHighlights();
+    }
+
+    // Highlight the path hexes
+    if (this.renderer?.setHighlightedHexes) {
+      // Highlight intermediate hexes as 'range' (blue)
+      const intermediateHexes = path.slice(1, -1);
+      if (intermediateHexes.length > 0) {
+        this.renderer.setHighlightedHexes(intermediateHexes, 'range');
+      }
+
+      // Highlight destination as 'selected' (green) if we have enough AP, 'danger' (yellow) if not
+      const highlightType = apCost <= this.gameState.actionPoints ? 'selected' : 'danger';
+      this.renderer.setHighlightedHexes([destination], highlightType);
+    }
+
+    // Show AP cost message
+    if (apCost > this.gameState.actionPoints) {
+      this.hud.showMessage(`Need ${apCost} AP (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+    } else {
+      this.hud.showMessage(`Move for ${apCost} AP - Click again to confirm`, 3000);
+    }
+  }
+
+  /**
+   * Clear the movement preview
+   */
+  private clearMovementPreview(): void {
+    this.movementPreviewDestination = null;
+    this.movementPreviewPath = [];
+    this.movementPreviewAPCost = 0;
+
+    if (this.renderer?.clearHighlights) {
+      this.renderer.clearHighlights();
+    }
+  }
+
+  /**
+   * Confirm the previewed movement
+   */
+  private confirmMovement(): void {
+    if (!this.selectedUnit || !this.gameState || !this.movementPreviewDestination) return;
+
+    const apCost = this.movementPreviewAPCost;
+
+    // Check if we have enough AP
+    if (apCost > this.gameState.actionPoints) {
+      this.hud.showMessage('Not enough action points', 2000);
+      this.clearMovementPreview();
+      return;
+    }
+
+    // Send the move action
+    const action: MoveAction = {
+      type: 'MOVE',
+      playerId: this.client['playerId'],
+      unitId: this.selectedUnit.id,
+      path: this.movementPreviewPath,
+      apCost,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+
+    // Optimistic update
+    this.gameState.actionPoints -= apCost;
+    this.selectedUnit.position = this.movementPreviewDestination;
+    this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Update renderer
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(this.gameState.units);
+    }
+
+    this.hud.showMessage(`Moved for ${apCost} AP`, 1500);
+    this.clearMovementPreview();
+    this.deselectUnit();
+  }
+
+  /**
+   * Move selected unit to destination (legacy direct move - now uses preview)
    */
   private moveSelectedUnit(destination: HexCoord): void {
     if (!this.selectedUnit || !this.gameState) return;
 
-    const path = this.calculatePath(this.selectedUnit.position, destination);
+    // Validate terrain compatibility for the unit type
+    const terrain = this.getTerrainAtHex(destination);
+    if (!terrain) {
+      this.hud.showMessage('Invalid destination', 2000);
+      return;
+    }
+
+    const terrainType = terrain as TerrainType;
+    const currentTide = this.gameState.currentTide || TideLevel.Normal;
+
+    if (!canUnitEnterTerrain(this.selectedUnit.type, terrainType, currentTide)) {
+      const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+      this.hud.showMessage(`${unitTypeName} cannot enter ${terrain} terrain`, 2000);
+      return;
+    }
+
+    const path = this.calculatePath(this.selectedUnit.position!, destination);
     const apCost = path.length - 1;
 
     if (apCost > this.gameState.actionPoints) {
@@ -915,14 +1300,107 @@ export class GameApp {
   /**
    * Handle end turn button click
    */
-  private handleEndTurn(): void {
+  private handleEndTurn(isTimeout = false): void {
     if (!this.isMyTurn || !this.gameState) return;
 
-    const savedAP = Math.min(this.gameState.actionPoints, 10);
+    // On timeout, no AP is saved; otherwise save remaining AP (up to 10)
+    const savedAP = isTimeout ? 0 : Math.min(this.gameState.actionPoints, 10);
     this.client.endTurn(savedAP);
 
-    this.hud.showMessage('Turn ended', 2000);
+    if (!isTimeout) {
+      this.hud.showMessage('Turn ended', 2000);
+    }
     this.deselectUnit();
+  }
+
+  /**
+   * Handle lift-off button click (during turns 21-25)
+   */
+  private handleLiftOff(): void {
+    if (!this.isMyTurn || !this.gameState) return;
+
+    const playerId = this.client['playerId'];
+
+    if (!canLiftOff(this.gameState, playerId)) {
+      const cost = calculateTakeOffCost(this.gameState, playerId);
+      this.hud.showMessage(`Cannot lift off (need ${cost} AP)`, 2000);
+      return;
+    }
+
+    // Execute lift-off
+    this.gameState = executeLiftOff(this.gameState, playerId);
+
+    // Send lift-off action to server
+    this.client.sendAction({
+      type: 'LIFT_OFF',
+      playerId,
+      decision: 'now',
+      timestamp: Date.now(),
+    });
+
+    this.hud.hideLiftOffButton();
+    this.hud.showMessage('Astronef lifted off!', 3000);
+    this.updateGameState(this.gameState);
+
+    // Check if game is over (all players lifted off or Turn 25 ended)
+    this.checkGameOver();
+  }
+
+  /**
+   * Handle Turn 21 lift-off decision (secret decision)
+   */
+  private handleLiftOffDecision(decision: boolean): void {
+    if (!this.gameState) return;
+
+    const playerId = this.client['playerId'];
+    const actionDecision: 'now' | 'stay' = decision ? 'now' : 'stay';
+    this.gameState = setLiftOffDecision(this.gameState, playerId, decision);
+
+    // Send decision to server (uses same LIFT_OFF action type)
+    this.client.sendAction({
+      type: 'LIFT_OFF',
+      playerId,
+      decision: actionDecision,
+      timestamp: Date.now(),
+    });
+
+    this.hud.hideLiftOffDecision();
+
+    if (decision) {
+      // Execute lift-off immediately if they chose 'now'
+      this.gameState = executeLiftOff(this.gameState, playerId);
+      this.hud.hideLiftOffButton();
+      this.hud.showMessage('Astronef lifted off!', 3000);
+      this.updateGameState(this.gameState);
+      this.checkGameOver();
+    } else {
+      this.hud.showMessage('You decided to stay on the planet.', 3000);
+    }
+  }
+
+  /**
+   * Check if game is over and display results
+   */
+  private checkGameOver(): void {
+    if (!this.gameState) return;
+
+    // Game ends when all players have lifted off or Turn 25 ends
+    const allLiftedOff = this.gameState.players.every(p => p.hasLiftedOff);
+    const turn25Over = this.gameState.turn >= 25;
+
+    if (allLiftedOff || turn25Over) {
+      const scores = calculateAllScores(this.gameState);
+      const winners = getWinners(this.gameState);
+
+      // Build player names map
+      const playerNames: Record<string, string> = {};
+      for (const player of this.gameState.players) {
+        const lobbyPlayer = this.lobbyPlayers.find(p => p.id === player.id);
+        playerNames[player.id] = lobbyPlayer?.name || player.id;
+      }
+
+      this.hud.showGameOver(scores, playerNames, winners);
+    }
   }
 
   /**

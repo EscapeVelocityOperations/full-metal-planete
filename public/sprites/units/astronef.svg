@@ -1,20 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
-  <!-- Astronef - Flying saucer/UFO style airship -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Astronef - Y-shaped spacecraft with center + 3 pods -->
   <defs>
-    <linearGradient id="astronef-body" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="astronef-hull" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#E0E0E0"/>
       <stop offset="50%" style="stop-color:#A0A0A0"/>
-      <stop offset="100%" style="stop-color:#707070"/>
+      <stop offset="100%" style="stop-color:#606060"/>
+    </linearGradient>
+    <linearGradient id="astronef-pod" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#C0C0C0"/>
+      <stop offset="100%" style="stop-color:#808080"/>
     </linearGradient>
   </defs>
-  <!-- Main saucer body -->
-  <ellipse cx="30" cy="26" rx="18" ry="8" fill="url(#astronef-body)" stroke="#505050" stroke-width="1"/>
-  <!-- Dome -->
-  <ellipse cx="30" cy="22" rx="10" ry="6" fill="#87CEEB" opacity="0.7" stroke="#505050" stroke-width="0.5"/>
-  <!-- Engine glow -->
-  <ellipse cx="30" cy="32" rx="8" ry="3" fill="#00FFFF" opacity="0.5"/>
-  <!-- Lights -->
-  <circle cx="20" cy="26" r="2" fill="#FF0000"/>
-  <circle cx="30" cy="28" r="2" fill="#00FF00"/>
-  <circle cx="40" cy="26" r="2" fill="#FF0000"/>
+
+  <!-- Arms connecting center to pods -->
+  <!-- W arm (left) -->
+  <rect x="10" y="46" width="35" height="8" rx="2" fill="url(#astronef-hull)" stroke="#404040" stroke-width="1"/>
+  <!-- NE arm (upper-right) -->
+  <rect x="50" y="20" width="30" height="8" rx="2" fill="url(#astronef-hull)" stroke="#404040" stroke-width="1" transform="rotate(-45 50 50)"/>
+  <!-- SE arm (lower-right) -->
+  <rect x="50" y="72" width="30" height="8" rx="2" fill="url(#astronef-hull)" stroke="#404040" stroke-width="1" transform="rotate(45 50 50)"/>
+
+  <!-- Center body (main hull) -->
+  <circle cx="50" cy="50" r="16" fill="url(#astronef-hull)" stroke="#404040" stroke-width="1.5"/>
+  <circle cx="50" cy="50" r="10" fill="#87CEEB" opacity="0.6" stroke="#404040" stroke-width="0.5"/>
+
+  <!-- Pod 1: W (left) - turret position -->
+  <circle cx="12" cy="50" r="10" fill="url(#astronef-pod)" stroke="#404040" stroke-width="1"/>
+  <circle cx="12" cy="50" r="5" fill="#606060"/>
+
+  <!-- Pod 2: NE (upper-right) - turret position -->
+  <circle cx="78" cy="22" r="10" fill="url(#astronef-pod)" stroke="#404040" stroke-width="1"/>
+  <circle cx="78" cy="22" r="5" fill="#606060"/>
+
+  <!-- Pod 3: SE (lower-right) - turret position -->
+  <circle cx="78" cy="78" r="10" fill="url(#astronef-pod)" stroke="#404040" stroke-width="1"/>
+  <circle cx="78" cy="78" r="5" fill="#606060"/>
+
+  <!-- Engine glow at center -->
+  <circle cx="50" cy="50" r="6" fill="#00FFFF" opacity="0.4"/>
 </svg>

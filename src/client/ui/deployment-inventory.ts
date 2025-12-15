@@ -6,6 +6,7 @@
 import { UnitType, type Unit, type PlayerColor } from '@/shared/game/types';
 
 export interface DeploymentInventoryConfig {
+  playerId: string;
   playerColor: string;
   onUnitSelect: (unitType: UnitType, unitId: string) => void;
   onRotate: () => void;
@@ -19,7 +20,7 @@ const UNIT_INFO: Record<UnitType, { name: string; symbol: string; description: s
   [UnitType.SuperTank]: { name: 'Super Tank', symbol: '\u25A0\u25A0', description: 'Heavy combat unit (2 AP/hex)' },
   [UnitType.MotorBoat]: { name: 'Motor Boat', symbol: '\u25BA', description: 'Fast water unit (1 AP/hex on water)' },
   [UnitType.Barge]: { name: 'Barge', symbol: '\u25AC', description: 'Transport unit (2 hexes, can carry units)' },
-  [UnitType.Crab]: { name: 'Crab', symbol: '\u2739', description: 'Amphibious unit (works on all terrain)' },
+  [UnitType.Crab]: { name: 'Crab', symbol: '\u2739', description: 'Land transporter (2 cargo slots, destroys enemies)' },
   [UnitType.Converter]: { name: 'Converter', symbol: '\u25CE', description: 'Mineral converter (extracts minerals)' },
   [UnitType.Bridge]: { name: 'Bridge', symbol: '\u2550', description: 'Creates land crossing over water' },
 };
@@ -69,18 +70,18 @@ export class DeploymentInventory {
     style.textContent = `
       .deployment-inventory {
         position: fixed;
-        left: 20px;
-        top: 50%;
-        transform: translateY(-50%);
-        background: rgba(20, 20, 30, 0.95);
+        left: 10px;
+        top: 80px;
+        background: rgba(20, 20, 30, 0.9);
         border: 2px solid #4a90e2;
         border-radius: 12px;
-        padding: 15px;
-        min-width: 200px;
-        max-height: 80vh;
+        padding: 12px;
+        width: 220px;
+        max-height: calc(100vh - 180px);
         overflow-y: auto;
         z-index: 100;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        pointer-events: auto;
       }
 
       .deployment-inventory.hidden {
@@ -202,9 +203,11 @@ export class DeploymentInventory {
   setUnits(units: Unit[]): void {
     // Filter to only include units owned by this player that can be deployed
     // Tower is excluded since it's auto-deployed with Astronef
+    // Astronef is excluded since it's placed during landing phase
     this.units = units.filter(u =>
-      u.owner.includes(this.config.playerColor) &&
-      u.type !== UnitType.Tower
+      u.owner === this.config.playerId &&
+      u.type !== UnitType.Tower &&
+      u.type !== UnitType.Astronef
     );
     this.render();
   }

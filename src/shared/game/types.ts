@@ -98,6 +98,7 @@ export interface UnitProperties {
   canPredictTide?: boolean;
   isNeutral?: boolean;
   maxShots?: number; // Max shots per turn (2 for combat units)
+  movementCost: number; // AP cost per hex (Infinity = cannot move)
 }
 
 export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
@@ -109,6 +110,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 0,
     size: 1,
     maxShots: 2,
+    movementCost: 1,
   },
   [UnitType.SuperTank]: {
     domain: 'land',
@@ -118,6 +120,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 0,
     size: 1,
     maxShots: 2,
+    movementCost: 2, // GCA - heavy unit
   },
   [UnitType.MotorBoat]: {
     domain: 'sea',
@@ -127,6 +130,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 0,
     size: 0, // Not transportable
     maxShots: 2,
+    movementCost: 1,
   },
   [UnitType.Barge]: {
     domain: 'sea',
@@ -136,6 +140,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 4,
     canCarryLarge: true, // Can carry Converter, Crab
     size: 0,
+    movementCost: 2, // Heavy transporter
   },
   [UnitType.Crab]: {
     domain: 'land',
@@ -145,6 +150,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 2,
     canCarryLarge: false,
     size: 2,
+    movementCost: 1,
   },
   [UnitType.Converter]: {
     domain: 'land',
@@ -155,6 +161,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     size: 2,
     canBuild: true,
     canPredictTide: true,
+    movementCost: 2, // Heavy unit
   },
   [UnitType.Bridge]: {
     domain: 'none', // Inert
@@ -164,6 +171,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 0,
     size: 1,
     isNeutral: true,
+    movementCost: Infinity, // Cannot move once placed
   },
   [UnitType.Tower]: {
     domain: 'fixed',
@@ -173,6 +181,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     cargoSlots: 0,
     size: 0,
     maxShots: 2,
+    movementCost: Infinity, // Fixed on Astronef
   },
   [UnitType.Astronef]: {
     domain: 'fixed',
@@ -181,6 +190,7 @@ export const UNIT_PROPERTIES: Record<UnitType, UnitProperties> = {
     canEnterMountain: false,
     cargoSlots: Infinity,
     size: 4, // 4 hexes
+    movementCost: Infinity, // Cannot move during game
   },
 };
 
@@ -197,7 +207,10 @@ export interface Unit {
   id: UnitId;
   type: UnitType;
   owner: PlayerId;
-  position: HexCoord;
+  position: HexCoord | null; // null when unit is in inventory/not placed
+
+  // Rotation for multi-hex units (0-5, each step is 60 degrees clockwise)
+  rotation?: number;
 
   // Combat state
   shotsRemaining: number; // Reset each turn (max 2 for combat units)
@@ -462,41 +475,41 @@ export const UNIT_SHAPES: Record<UnitType, UnitShape> = {
     ],
     canRotate: true,
   },
-  // Single-hex units
+  // Single-hex units (canRotate enables visual sprite rotation)
   [UnitType.Tower]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Tank]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.SuperTank]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.MotorBoat]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Crab]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Converter]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
   [UnitType.Bridge]: {
     hexCount: 1,
     offsets: [{ q: 0, r: 0 }],
-    canRotate: false,
+    canRotate: true,
   },
 };
 
