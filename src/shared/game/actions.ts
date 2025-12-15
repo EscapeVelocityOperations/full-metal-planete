@@ -121,7 +121,7 @@ function findUnit(state: GameState, unitId: string): Unit | undefined {
  */
 function isHexOccupied(state: GameState, hex: HexCoord, excludeUnitId?: string): boolean {
   return state.units.some(
-    (u) => u.position.q === hex.q && u.position.r === hex.r && u.id !== excludeUnitId
+    (u) => u.position !== null && u.position.q === hex.q && u.position.r === hex.r && u.id !== excludeUnitId
   );
 }
 
