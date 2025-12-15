@@ -2,7 +2,7 @@
  * HUD (Heads-Up Display) component for game interface
  */
 
-import type { TideLevel, GamePhase } from '@/shared/game/types';
+import { UnitType, type TideLevel, type GamePhase, type Unit, type Mineral, type HexCoord } from '@/shared/game/types';
 
 export interface LobbyPlayer {
   id: string;
@@ -16,6 +16,14 @@ export interface PhaseInfo {
   isMyTurn: boolean;
   currentPlayerName: string;
   currentPlayerColor: string;
+}
+
+export interface UnitActionContext {
+  unit: Unit;
+  minerals: Mineral[];  // Minerals at unit's position
+  cargo: (string)[];    // Current cargo (unit IDs or mineral IDs)
+  cargoSlots: number;   // Max cargo capacity
+  adjacentHexes: HexCoord[];  // Valid hexes for dropping cargo
 }
 
 const PHASE_INSTRUCTIONS: Record<GamePhase, string> = {
@@ -543,6 +551,168 @@ export class HUD {
     this.liftOffActionCallback = callback;
   }
 
+  // ============================================================================
+  // Unit Context Actions (Mineral Pickup/Drop)
+  // ============================================================================
+
+  private unitContextPanel: HTMLElement | null = null;
+  private loadCallback: ((mineralId: string) => void) | null = null;
+  private unloadCallback: ((cargoId: string, destination: HexCoord) => void) | null = null;
+  private selectedDropHex: HexCoord | null = null;
+  private currentContext: UnitActionContext | null = null;
+
+  /**
+   * Show unit context action panel when a transporter is selected
+   */
+  showUnitActions(context: UnitActionContext): void {
+    this.currentContext = context;
+
+    // Only show for transporter units
+    const transporterTypes = [UnitType.Crab, UnitType.Converter, UnitType.Barge];
+    if (!transporterTypes.includes(context.unit.type)) {
+      this.hideUnitActions();
+      return;
+    }
+
+    // Create panel if it doesn't exist
+    if (!this.unitContextPanel) {
+      this.unitContextPanel = document.createElement('div');
+      this.unitContextPanel.id = 'unit-context-panel';
+      this.unitContextPanel.className = 'unit-context-panel';
+      document.body.appendChild(this.unitContextPanel);
+    }
+
+    const unitName = context.unit.type.charAt(0).toUpperCase() + context.unit.type.slice(1);
+    const cargoCount = context.cargo.length;
+    const freeSlots = context.cargoSlots - cargoCount;
+
+    let actionsHtml = `
+      <div class="unit-context-header">
+        <span class="unit-name">${unitName}</span>
+        <span class="cargo-info">Cargo: ${cargoCount}/${context.cargoSlots}</span>
+      </div>
+      <div class="unit-actions">
+    `;
+
+    // Pickup mineral button (if mineral at position and has free slots)
+    if (context.minerals.length > 0 && freeSlots > 0) {
+      for (const mineral of context.minerals) {
+        actionsHtml += `
+          <button class="action-btn pickup-btn" data-mineral-id="${mineral.id}">
+            ⛏️ Pick up Mineral
+            <span class="action-cost">1 AP</span>
+          </button>
+        `;
+      }
+    }
+
+    // Drop cargo buttons (if has cargo)
+    if (cargoCount > 0) {
+      actionsHtml += `
+        <div class="drop-section">
+          <label>Drop cargo:</label>
+          <select id="cargo-select" class="cargo-select">
+            ${context.cargo.map((cargoId, idx) => `
+              <option value="${cargoId}">Cargo ${idx + 1}</option>
+            `).join('')}
+          </select>
+          <div class="drop-hexes">
+            ${context.adjacentHexes.map((hex, idx) => `
+              <button class="action-btn drop-hex-btn" data-hex-q="${hex.q}" data-hex-r="${hex.r}">
+                Drop at (${hex.q},${hex.r})
+                <span class="action-cost">1 AP</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Close button
+    actionsHtml += `
+      </div>
+      <button class="action-btn close-btn" id="close-unit-panel">✕ Close</button>
+    `;
+
+    this.unitContextPanel.innerHTML = actionsHtml;
+    this.unitContextPanel.style.display = 'block';
+
+    // Add event listeners
+    this.setupUnitActionListeners();
+  }
+
+  /**
+   * Set up event listeners for unit action buttons
+   */
+  private setupUnitActionListeners(): void {
+    if (!this.unitContextPanel) return;
+
+    // Pickup buttons
+    const pickupBtns = this.unitContextPanel.querySelectorAll('.pickup-btn');
+    pickupBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mineralId = (btn as HTMLElement).dataset.mineralId;
+        if (mineralId && this.loadCallback) {
+          this.loadCallback(mineralId);
+        }
+      });
+    });
+
+    // Drop buttons
+    const dropBtns = this.unitContextPanel.querySelectorAll('.drop-hex-btn');
+    dropBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const q = parseInt((btn as HTMLElement).dataset.hexQ || '0', 10);
+        const r = parseInt((btn as HTMLElement).dataset.hexR || '0', 10);
+        const cargoSelect = document.getElementById('cargo-select') as HTMLSelectElement;
+        const cargoId = cargoSelect?.value;
+        if (cargoId && this.unloadCallback) {
+          this.unloadCallback(cargoId, { q, r });
+        }
+      });
+    });
+
+    // Close button
+    const closeBtn = document.getElementById('close-unit-panel');
+    closeBtn?.addEventListener('click', () => {
+      this.hideUnitActions();
+    });
+  }
+
+  /**
+   * Hide unit context action panel
+   */
+  hideUnitActions(): void {
+    if (this.unitContextPanel) {
+      this.unitContextPanel.style.display = 'none';
+    }
+    this.currentContext = null;
+    this.selectedDropHex = null;
+  }
+
+  /**
+   * Set callback for mineral load action
+   */
+  onLoad(callback: (mineralId: string) => void): void {
+    this.loadCallback = callback;
+  }
+
+  /**
+   * Set callback for cargo unload action
+   */
+  onUnload(callback: (cargoId: string, destination: HexCoord) => void): void {
+    this.unloadCallback = callback;
+  }
+
+  /**
+   * Update the unit actions panel (e.g., after AP change)
+   */
+  updateUnitActions(context: UnitActionContext): void {
+    if (this.unitContextPanel?.style.display === 'block') {
+      this.showUnitActions(context);
+    }
+  }
+
   /**
    * Show game over modal with final scores
    */
@@ -615,6 +785,10 @@ export class HUD {
     if (this.liftOffBtn) {
       this.liftOffBtn.remove();
       this.liftOffBtn = null;
+    }
+    if (this.unitContextPanel) {
+      this.unitContextPanel.remove();
+      this.unitContextPanel = null;
     }
   }
 }

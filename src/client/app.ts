@@ -6,10 +6,10 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { HEX_SIZE } from '@/client/renderer/types';
 import { GameClient } from './game-client';
-import { HUD, type LobbyPlayer, type PhaseInfo } from './ui/hud';
+import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
-import { UnitType, TideLevel, GamePhase, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type TerrainType } from '@/shared/game/types';
+import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType } from '@/shared/game/types';
 import { hexKey, hexRotateAround } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
@@ -167,6 +167,14 @@ export class GameApp {
 
     this.hud.onLiftOff(() => {
       this.handleLiftOff();
+    });
+
+    this.hud.onLoad((mineralId: string) => {
+      this.handleLoadMineral(mineralId);
+    });
+
+    this.hud.onUnload((cargoId: string, destination: HexCoord) => {
+      this.handleUnloadCargo(cargoId, destination);
     });
   }
 
@@ -890,6 +898,9 @@ export class GameApp {
     this.selectedUnit = unit;
     this.hud.showMessage(`Selected ${unit.type}`, 2000);
     console.log('Selected unit:', unit);
+
+    // Show unit context panel for transporter units
+    this.showUnitContextPanel(unit);
   }
 
   /**
@@ -899,8 +910,131 @@ export class GameApp {
     if (this.selectedUnit) {
       this.clearMovementPreview();
       this.selectedUnit = null;
+      this.hud.hideUnitActions();
       this.hud.showMessage('Unit deselected', 1000);
     }
+  }
+
+  /**
+   * Show unit context action panel for a unit
+   */
+  private showUnitContextPanel(unit: Unit): void {
+    if (!this.gameState || !unit.position) return;
+
+    // Get minerals at unit's position
+    const mineralsAtPosition = this.gameState.minerals.filter(
+      m => m.position.q === unit.position!.q && m.position.r === unit.position!.r
+    );
+
+    // Get unit's cargo
+    const cargo = unit.cargo || [];
+    const cargoSlots = UNIT_PROPERTIES[unit.type].cargoSlots;
+
+    // Get adjacent hexes for dropping cargo
+    const adjacentHexes = this.getNeighbors(unit.position).filter(hex => {
+      const terrain = this.getTerrainAtHex(hex);
+      return terrain && terrain !== 'reef' && terrain !== 'swamp';
+    });
+
+    const context: UnitActionContext = {
+      unit,
+      minerals: mineralsAtPosition,
+      cargo,
+      cargoSlots,
+      adjacentHexes,
+    };
+
+    this.hud.showUnitActions(context);
+  }
+
+  /**
+   * Handle mineral load action
+   */
+  private handleLoadMineral(mineralId: string): void {
+    if (!this.selectedUnit || !this.gameState || !this.isMyTurn) return;
+
+    // Validate we have enough AP (1 AP for load)
+    if (this.gameState.actionPoints < 1) {
+      this.hud.showMessage('Not enough AP (need 1)', 2000);
+      return;
+    }
+
+    // Send load action to server
+    const action: LoadAction = {
+      type: 'LOAD',
+      playerId: this.client['playerId'],
+      transporterId: this.selectedUnit.id,
+      cargoId: mineralId,
+      apCost: 1,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+
+    // Optimistic update
+    const mineral = this.gameState.minerals.find(m => m.id === mineralId);
+    if (mineral && this.selectedUnit.cargo) {
+      this.selectedUnit.cargo.push(mineralId);
+      // Remove mineral from map
+      this.gameState.minerals = this.gameState.minerals.filter(m => m.id !== mineralId);
+    } else if (mineral) {
+      this.selectedUnit.cargo = [mineralId];
+      this.gameState.minerals = this.gameState.minerals.filter(m => m.id !== mineralId);
+    }
+
+    this.gameState.actionPoints -= 1;
+    this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Refresh unit context panel
+    this.showUnitContextPanel(this.selectedUnit);
+    this.hud.showMessage('Mineral loaded!', 1500);
+  }
+
+  /**
+   * Handle cargo unload action
+   */
+  private handleUnloadCargo(cargoId: string, destination: HexCoord): void {
+    if (!this.selectedUnit || !this.gameState || !this.isMyTurn) return;
+
+    // Validate we have enough AP (1 AP for unload)
+    if (this.gameState.actionPoints < 1) {
+      this.hud.showMessage('Not enough AP (need 1)', 2000);
+      return;
+    }
+
+    // Send unload action to server
+    const action: UnloadAction = {
+      type: 'UNLOAD',
+      playerId: this.client['playerId'],
+      transporterId: this.selectedUnit.id,
+      cargoId,
+      destination,
+      apCost: 1,
+      timestamp: Date.now(),
+    };
+
+    this.client.sendAction(action);
+
+    // Optimistic update - check if cargo is a mineral
+    if (cargoId.startsWith('mineral-') || cargoId.includes('mineral')) {
+      // Add mineral back to map
+      this.gameState.minerals.push({
+        id: cargoId,
+        position: destination,
+      });
+    }
+
+    // Remove from cargo
+    if (this.selectedUnit.cargo) {
+      this.selectedUnit.cargo = this.selectedUnit.cargo.filter(c => c !== cargoId);
+    }
+
+    this.gameState.actionPoints -= 1;
+    this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Refresh unit context panel
+    this.showUnitContextPanel(this.selectedUnit);
+    this.hud.showMessage('Cargo dropped!', 1500);
   }
 
   /**
