@@ -15,6 +15,7 @@ export interface IHexRenderer {
   setTerrainData(terrainHexes: TerrainHex[]): void;
   setUnits?(units: Unit[]): void;
   setPlayerColors?(playerColors: Record<string, string>): void;
+  setMinerals?(minerals: Array<{ id: string; position: { q: number; r: number } }>): void;
   setTide(tide: TideLevel): void;
   setViewport(viewport: Partial<Viewport>): void;
   render(): void;
