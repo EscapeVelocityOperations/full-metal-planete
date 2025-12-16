@@ -114,6 +114,7 @@ src/
 
 - Original board game by Gérard Mathieu, Ludovic Lefebvre, and Pascal Trigaux (1988)
 - Published by Ludodélire, later Asmodée
+- **[fmp_board](https://github.com/guillaume-rico/fmp_board)** by Guillaume Rico - Official map terrain data, unit sprites, and game logic reference
 - This is a fan-made digital adaptation for educational purposes
 
 ## License
