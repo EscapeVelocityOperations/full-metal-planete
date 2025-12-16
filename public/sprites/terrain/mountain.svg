@@ -1,14 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
-  <!-- Flat-top hex shape - rocky gray base -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#808080"/>
-  <!-- Mountain peaks -->
-  <polygon points="20,38 30,15 40,38" fill="#9A9A9A"/>
-  <polygon points="25,38 30,20 35,38" fill="#707070"/>
-  <!-- Snow cap -->
-  <polygon points="28,20 30,15 32,20" fill="#E0E0E0"/>
-  <!-- Rock texture -->
-  <polygon points="15,38 22,28 28,38" fill="#6A6A6A" opacity="0.5"/>
-  <polygon points="32,38 38,25 45,38" fill="#6A6A6A" opacity="0.5"/>
-  <!-- Border -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#606060" stroke-width="0.5"/>
+  <!-- Mountain/Montagne terrain hex - dark rocky (impassable) -->
+  <defs>
+    <linearGradient id="mtn-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#606060"/>
+      <stop offset="40%" style="stop-color:#505050"/>
+      <stop offset="100%" style="stop-color:#3A3A3A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Flat-top hexagon base -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#mtn-gradient)"
+           stroke="#252525"
+           stroke-width="1"/>
+
+  <!-- Rocky texture details - jagged peaks -->
+  <g fill="#4A4A4A">
+    <polygon points="18,42 26,20 34,42"/>
+    <polygon points="26,42 34,14 42,42"/>
+  </g>
+  <g fill="#5A5A5A">
+    <polygon points="22,42 28,24 34,42"/>
+    <polygon points="30,42 36,18 42,42"/>
+  </g>
+
+  <!-- Snow/mineral highlights -->
+  <g fill="#707070" opacity="0.6">
+    <polygon points="26,24 28,20 30,24"/>
+    <polygon points="34,20 36,14 38,20"/>
+  </g>
+
+  <!-- Dark crevices -->
+  <g stroke="#2A2A2A" stroke-width="0.5" fill="none" opacity="0.6">
+    <line x1="24" y1="32" x2="28" y2="26"/>
+    <line x1="34" y1="30" x2="38" y2="22"/>
+  </g>
 </svg>

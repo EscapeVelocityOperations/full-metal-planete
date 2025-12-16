@@ -1,16 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <!-- Reef/Ilot terrain hex - small rocky islands in water (tide-dependent) -->
   <defs>
-    <pattern id="coral" patternUnits="userSpaceOnUse" width="12" height="12">
-      <circle cx="3" cy="3" r="1.5" fill="#8A9AB8" opacity="0.4"/>
-      <circle cx="9" cy="9" r="1" fill="#8A9AB8" opacity="0.3"/>
-    </pattern>
+    <linearGradient id="reef-water" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6B8BA0"/>
+      <stop offset="100%" style="stop-color:#5F788C"/>
+    </linearGradient>
+    <linearGradient id="reef-rock" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#9A8A70"/>
+      <stop offset="50%" style="stop-color:#8A7A60"/>
+      <stop offset="100%" style="stop-color:#7A6A50"/>
+    </linearGradient>
   </defs>
-  <!-- Flat-top hex shape - shallow water with coral -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#7A8BA8"/>
-  <!-- Coral pattern -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="url(#coral)"/>
-  <!-- Reef filled dot indicator (matches original map legend) -->
-  <circle cx="30" cy="26" r="5" fill="#5A6A88"/>
-  <!-- Border -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#6A7A98" stroke-width="0.5"/>
+
+  <!-- Water base -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#reef-water)"
+           stroke="#405060"
+           stroke-width="0.8"/>
+
+  <!-- Rocky islets -->
+  <g fill="url(#reef-rock)">
+    <path d="M18,20 Q22,14 28,16 Q32,20 28,26 Q24,30 18,26 Q14,24 18,20" stroke="#6A5A40" stroke-width="0.5"/>
+    <path d="M36,28 Q42,22 48,28 Q50,36 44,40 Q36,42 32,36 Q32,32 36,28" stroke="#6A5A40" stroke-width="0.5"/>
+    <ellipse cx="24" cy="40" rx="5" ry="4" stroke="#6A5A40" stroke-width="0.5"/>
+    <ellipse cx="44" cy="14" rx="4" ry="3" stroke="#6A5A40" stroke-width="0.5"/>
+  </g>
+
+  <!-- Sand edges -->
+  <g fill="#D4B080" opacity="0.4">
+    <ellipse cx="24" cy="22" rx="3" ry="2"/>
+    <ellipse cx="40" cy="34" rx="2" ry="1.5"/>
+  </g>
+
+  <!-- Filled dot indicator (matches legend) -->
+  <circle cx="30" cy="26" r="4" fill="#5A6A88" opacity="0.5"/>
 </svg>

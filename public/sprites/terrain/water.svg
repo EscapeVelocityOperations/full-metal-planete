@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <!-- Water/Eau terrain hex - blue-gray ocean -->
+  <defs>
+    <linearGradient id="water-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6B8BA0"/>
+      <stop offset="30%" style="stop-color:#5F788C"/>
+      <stop offset="70%" style="stop-color:#50829C"/>
+      <stop offset="100%" style="stop-color:#4A7090"/>
+    </linearGradient>
+    <pattern id="water-waves" patternUnits="userSpaceOnUse" width="20" height="10">
+      <path d="M0,5 Q5,2 10,5 T20,5" fill="none" stroke="#7090A8" stroke-width="0.5" opacity="0.4"/>
+      <path d="M0,8 Q5,5 10,8 T20,8" fill="none" stroke="#7090A8" stroke-width="0.3" opacity="0.3"/>
+    </pattern>
+  </defs>
+
+  <!-- Flat-top hexagon -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#water-gradient)"
+           stroke="#405060"
+           stroke-width="1"/>
+
+  <!-- Wave pattern overlay -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#water-waves)"
+           opacity="0.5"/>
+</svg>

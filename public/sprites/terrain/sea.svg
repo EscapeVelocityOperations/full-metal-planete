@@ -1,13 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <!-- Sea/Eau terrain hex - deep water -->
   <defs>
-    <pattern id="waves" patternUnits="userSpaceOnUse" width="12" height="6">
-      <path d="M0,3 Q3,0 6,3 T12,3" fill="none" stroke="#5A6A8E" stroke-width="0.8" opacity="0.5"/>
+    <linearGradient id="sea-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7090A8"/>
+      <stop offset="30%" style="stop-color:#6B7B9E"/>
+      <stop offset="70%" style="stop-color:#5F788C"/>
+      <stop offset="100%" style="stop-color:#506A80"/>
+    </linearGradient>
+    <pattern id="sea-waves" patternUnits="userSpaceOnUse" width="16" height="8">
+      <path d="M0,4 Q4,1 8,4 T16,4" fill="none" stroke="#8090A8" stroke-width="0.6" opacity="0.4"/>
+      <path d="M0,7 Q4,4 8,7 T16,7" fill="none" stroke="#8090A8" stroke-width="0.4" opacity="0.3"/>
     </pattern>
   </defs>
-  <!-- Flat-top hex shape -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#6B7B9E"/>
-  <!-- Wave pattern -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="url(#waves)"/>
-  <!-- Subtle highlight -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#7A8BA8" stroke-width="0.5" opacity="0.3"/>
+
+  <!-- Flat-top hexagon -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#sea-gradient)"
+           stroke="#405060"
+           stroke-width="0.8"/>
+
+  <!-- Wave pattern overlay -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#sea-waves)"/>
+
+  <!-- Subtle depth highlight -->
+  <ellipse cx="30" cy="26" rx="12" ry="10" fill="#506A80" opacity="0.15"/>
 </svg>

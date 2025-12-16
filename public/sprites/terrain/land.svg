@@ -1,14 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 52">
+  <!-- Land/Sol terrain hex - sandy/ochre color matching original board -->
   <defs>
-    <pattern id="grass" patternUnits="userSpaceOnUse" width="8" height="8">
-      <circle cx="2" cy="2" r="0.5" fill="#C49A64" opacity="0.4"/>
-      <circle cx="6" cy="6" r="0.5" fill="#C49A64" opacity="0.4"/>
+    <linearGradient id="land-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4A574"/>
+      <stop offset="50%" style="stop-color:#C99153"/>
+      <stop offset="100%" style="stop-color:#B8824A"/>
+    </linearGradient>
+    <pattern id="land-texture" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="8" height="8" fill="transparent"/>
+      <circle cx="2" cy="2" r="0.5" fill="#B8824A" opacity="0.5"/>
+      <circle cx="6" cy="4" r="0.3" fill="#D4A574" opacity="0.4"/>
+      <circle cx="4" cy="7" r="0.4" fill="#B8824A" opacity="0.3"/>
     </pattern>
   </defs>
-  <!-- Flat-top hex shape -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="#D4A574"/>
-  <!-- Grass texture -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="url(#grass)"/>
-  <!-- Border -->
-  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26" fill="none" stroke="#C49A64" stroke-width="0.5"/>
+
+  <!-- Flat-top hexagon -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#land-gradient)"
+           stroke="#A07040"
+           stroke-width="0.8"/>
+
+  <!-- Texture overlay -->
+  <polygon points="15,0 45,0 60,26 45,52 15,52 0,26"
+           fill="url(#land-texture)"
+           opacity="0.4"/>
 </svg>
