@@ -10,7 +10,7 @@ import { UnitType, TideLevel, PlayerColor, GamePhase, TerrainType, GAME_CONSTANT
 import { hexRotateAround, getUnitFootprint, getOccupiedHexes, isPlacementValidWithTerrain, isTurretPlacementValid, hexKey, findPath, getReachableHexes, hexFromKey, hexNeighbors, type PathTerrainGetter } from '@/shared/game/hex';
 import { generateDemoMap, generateMinerals } from '@/shared/game/map-generator';
 import { validateLoadAction, validateUnloadAction } from '@/shared/game/actions';
-import { applyLoadAction, applyUnloadAction } from '@/shared/game/state';
+import { applyLoadAction, applyUnloadAction, getTideForecast, getPlayerConverterCount, createTideDeck, shuffleArray } from '@/shared/game/state';
 import {
   isCombatUnit,
   canUnitFire,
@@ -156,7 +156,7 @@ export class LabMode {
       turn: 3,
       turnOrder: [team1Id, team2Id],
       currentTide: TideLevel.Normal,
-      tideDeck: [],
+      tideDeck: shuffleArray(createTideDeck()),
       tideDiscard: [],
       actionPoints: 15,
       savedActionPoints: { [team1Id]: 0, [team2Id]: 0 },
@@ -960,6 +960,64 @@ export class LabMode {
         .lab-tide-btn.normal { color: #ffaa00; }
         .lab-tide-btn.high { color: #ff4444; }
 
+        .lab-tide-forecast {
+          display: flex;
+          gap: 8px;
+          margin-top: 12px;
+          padding: 8px;
+          background: rgba(0, 0, 0, 0.3);
+          border-radius: 6px;
+        }
+
+        .lab-tide-forecast-label {
+          font-size: 12px;
+          color: #aaa;
+          align-self: center;
+        }
+
+        .lab-tide-forecast-items {
+          display: flex;
+          gap: 6px;
+        }
+
+        .lab-tide-forecast-item {
+          font-size: 12px;
+          font-weight: bold;
+          padding: 4px 8px;
+          border-radius: 4px;
+          text-transform: uppercase;
+        }
+
+        .lab-tide-forecast-item.hidden {
+          display: none;
+        }
+
+        .lab-tide-forecast-item.low {
+          background: rgba(68, 255, 68, 0.3);
+          color: #44ff44;
+        }
+
+        .lab-tide-forecast-item.normal {
+          background: rgba(255, 170, 0, 0.3);
+          color: #ffaa00;
+        }
+
+        .lab-tide-forecast-item.high {
+          background: rgba(255, 68, 68, 0.3);
+          color: #ff4444;
+        }
+
+        .lab-tide-forecast-item.unknown {
+          background: rgba(136, 136, 136, 0.3);
+          color: #888;
+          filter: blur(2px);
+        }
+
+        .lab-tide-forecast.no-converter .lab-tide-forecast-item {
+          filter: blur(4px);
+          opacity: 0.3;
+        }
+
         .lab-action-btn {
           width: 100%;
           padding: 12px;
@@ -1386,6 +1444,13 @@ export class LabMode {
           <button class="lab-tide-btn low ${this.gameState.currentTide === 'low' ? 'active' : ''}" data-tide="low">Low</button>
           <button class="lab-tide-btn normal ${this.gameState.currentTide === 'normal' ? 'active' : ''}" data-tide="normal">Normal</button>
           <button class="lab-tide-btn high ${this.gameState.currentTide === 'high' ? 'active' : ''}" data-tide="high">High</button>
+        </div>
+        <div class="lab-tide-forecast ${this.getConverterCount() === 0 ? 'no-converter' : ''}" id="lab-tide-forecast">
+          <span class="lab-tide-forecast-label">Forecast:</span>
+          <div class="lab-tide-forecast-items">
+            <span class="lab-tide-forecast-item unknown" id="lab-tide-forecast-1">?</span>
+            <span class="lab-tide-forecast-item unknown" id="lab-tide-forecast-2">?</span>
+          </div>
         </div>
       </div>
 
@@ -1866,6 +1931,9 @@ export class LabMode {
     if (this.mode === 'setup') {
       this.createDeploymentInventory();
     }
+
+    // Update tide forecast for new team
+    this.updateTideForecast();
   }
 
   /**
@@ -1932,6 +2000,57 @@ export class LabMode {
   }
 
   /**
+   * Get the number of converters owned by the current team
+   */
+  private getConverterCount(): number {
+    return getPlayerConverterCount(this.gameState, this.gameState.currentPlayer);
+  }
+
+  /**
+   * Update tide forecast UI based on converter ownership
+   */
+  private updateTideForecast(): void {
+    const converterCount = this.getConverterCount();
+    const forecast = getTideForecast(this.gameState, this.gameState.currentPlayer);
+
+    const container = this.controlPanel?.querySelector('#lab-tide-forecast');
+    const item1 = this.controlPanel?.querySelector('#lab-tide-forecast-1');
+    const item2 = this.controlPanel?.querySelector('#lab-tide-forecast-2');
+
+    if (!container || !item1 || !item2) return;
+
+    // Toggle no-converter class
+    container.classList.toggle('no-converter', converterCount === 0);
+
+    // Update forecast items
+    if (converterCount === 0) {
+      // No converter - show blurred "?"
+      item1.className = 'lab-tide-forecast-item unknown';
+      item1.textContent = '?';
+      item2.className = 'lab-tide-forecast-item unknown';
+      item2.textContent = '?';
+    } else {
+      // Show forecast based on converter count
+      if (forecast.length >= 1) {
+        item1.className = `lab-tide-forecast-item ${forecast[0]}`;
+        item1.textContent = forecast[0].charAt(0).toUpperCase() + forecast[0].slice(1);
+        item1.classList.remove('hidden');
+      } else {
+        item1.classList.add('hidden');
+      }
+
+      if (forecast.length >= 2) {
+        item2.className = `lab-tide-forecast-item ${forecast[1]}`;
+        item2.textContent = forecast[1].charAt(0).toUpperCase() + forecast[1].slice(1);
+        item2.classList.remove('hidden');
+      } else {
+        item2.className = 'lab-tide-forecast-item unknown hidden';
+        item2.textContent = '?';
+      }
+    }
+  }
+
+  /**
    * Reset all units to unplaced state
    */
   private resetAllUnits(): void {
@@ -1944,6 +2063,7 @@ export class LabMode {
     }
 
     this.createDeploymentInventory();
+    this.updateTideForecast();
     this.render();
   }
 
@@ -2022,6 +2142,7 @@ export class LabMode {
     this.createDeploymentInventory();
     this.selectedUnit = null;
     this.updateControlPanel();
+    this.updateTideForecast();
     this.render();
   }
 
@@ -2325,6 +2446,7 @@ export class LabMode {
       }
 
       this.createDeploymentInventory();
+      this.updateTideForecast();
       this.render();
     }
   }

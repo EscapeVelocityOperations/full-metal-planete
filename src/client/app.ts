@@ -13,7 +13,7 @@ import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type H
 import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainGetter, getOccupiedHexes } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
-import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, type TerrainGetter } from '@/shared/game/combat';
+import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, getHexCoverage, type TerrainGetter } from '@/shared/game/combat';
 import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, setLiftOffDecision } from '@/shared/game/state';
 
 export interface GameConfig {
@@ -50,6 +50,11 @@ export class GameApp {
   private movementPreviewDestination: HexCoord | null = null;
   private movementPreviewPath: HexCoord[] = [];
   private movementPreviewAPCost: number = 0;
+
+  // Under-fire zone visualization state
+  private showUnderFireZones: boolean = true; // Show enemy threat zones by default
+  private enemyDangerHexes: Set<string> = new Set(); // Hexes under single enemy fire
+  private enemyCrossfireHexes: Set<string> = new Set(); // Hexes under crossfire (2+ enemy units)
 
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
@@ -632,6 +637,98 @@ export class GameApp {
 
     // Handle deployment inventory visibility
     this.updateDeploymentInventory();
+
+    // Update under-fire zone visualization
+    this.updateUnderFireVisualization();
+  }
+
+  /**
+   * Update the visualization of hexes under enemy fire.
+   * Shows danger zones (1 enemy unit coverage) and crossfire zones (2+ enemy units).
+   */
+  private updateUnderFireVisualization(): void {
+    if (!this.gameState || !this.renderer?.setHighlightedHexes || !this.showUnderFireZones) {
+      return;
+    }
+
+    // Only show during playing phase
+    if (this.gameState.phase !== 'playing') {
+      return;
+    }
+
+    const myPlayerId = this.client['playerId'];
+    const enemyPlayerIds = this.gameState.players
+      .filter(p => p.id !== myPlayerId)
+      .map(p => p.id);
+
+    // Create terrain getter for range calculations
+    const terrainMap = new Map<string, HexTerrain>();
+    if (this.gameState.terrain) {
+      for (const hex of this.gameState.terrain) {
+        terrainMap.set(hexKey(hex.coord), hex);
+      }
+    }
+    const getTerrainAt = (coord: HexCoord | null): HexTerrain['type'] => {
+      if (!coord) return 'land' as HexTerrain['type'];
+      const hex = terrainMap.get(hexKey(coord));
+      return hex?.type || ('land' as HexTerrain['type']);
+    };
+
+    // Aggregate enemy coverage
+    const allDangerHexes: HexCoord[] = [];
+    const allCrossfireHexes: HexCoord[] = [];
+
+    for (const enemyId of enemyPlayerIds) {
+      const coverage = getHexCoverage(this.gameState.units, enemyId, getTerrainAt);
+      allDangerHexes.push(...coverage.singleCoverage);
+      allCrossfireHexes.push(...coverage.multiCoverage);
+    }
+
+    // Cache coverage data for move warnings
+    this.enemyDangerHexes.clear();
+    this.enemyCrossfireHexes.clear();
+    for (const hex of allDangerHexes) {
+      this.enemyDangerHexes.add(hexKey(hex));
+    }
+    for (const hex of allCrossfireHexes) {
+      this.enemyCrossfireHexes.add(hexKey(hex));
+    }
+
+    // Apply highlights - danger first (orange), then crossfire (red) on top
+    // Note: Crossfire zones are where the current player's units can be destroyed
+    if (allDangerHexes.length > 0) {
+      this.renderer.setHighlightedHexes(allDangerHexes, 'danger');
+    }
+    if (allCrossfireHexes.length > 0) {
+      this.renderer.setHighlightedHexes(allCrossfireHexes, 'crossfire');
+    }
+  }
+
+  /**
+   * Check if a hex is under enemy fire
+   * @returns 'none' if safe, 'danger' if under single enemy fire, 'crossfire' if under 2+ enemy fire
+   */
+  private getHexThreatLevel(coord: HexCoord): 'none' | 'danger' | 'crossfire' {
+    const key = hexKey(coord);
+    if (this.enemyCrossfireHexes.has(key)) {
+      return 'crossfire';
+    }
+    if (this.enemyDangerHexes.has(key)) {
+      return 'danger';
+    }
+    return 'none';
+  }
+
+  /**
+   * Toggle the display of under-fire zones
+   */
+  public toggleUnderFireZones(): void {
+    this.showUnderFireZones = !this.showUnderFireZones;
+    if (this.showUnderFireZones) {
+      this.updateUnderFireVisualization();
+    } else {
+      this.renderer?.clearHighlights?.();
+    }
   }
 
   /**
@@ -1221,6 +1318,9 @@ export class GameApp {
       this.renderer.clearHighlights();
     }
 
+    // Check if destination is under enemy fire
+    const threatLevel = this.getHexThreatLevel(destination);
+
     // Highlight the path hexes
     if (this.renderer?.setHighlightedHexes) {
       // Highlight intermediate hexes as 'range' (blue)
@@ -1229,17 +1329,32 @@ export class GameApp {
         this.renderer.setHighlightedHexes(intermediateHexes, 'range');
       }
 
-      // Highlight destination as 'selected' (green) if we have enough AP, 'danger' (yellow) if not
-      const highlightType = apCost <= this.gameState.actionPoints ? 'selected' : 'danger';
+      // Highlight destination based on threat level and AP availability
+      let highlightType: 'selected' | 'danger' | 'crossfire';
+      if (threatLevel === 'crossfire') {
+        highlightType = 'crossfire'; // Red - high danger!
+      } else if (threatLevel === 'danger' || apCost > this.gameState.actionPoints) {
+        highlightType = 'danger'; // Orange - warning
+      } else {
+        highlightType = 'selected'; // Green - safe
+      }
       this.renderer.setHighlightedHexes([destination], highlightType);
     }
 
-    // Show AP cost message with path length info
+    // Build message with threat warning
     const pathInfo = stepsCount > 1 ? ` (${stepsCount} hexes)` : '';
+    let threatWarning = '';
+    if (threatLevel === 'crossfire') {
+      threatWarning = ' ⚠️ CROSSFIRE ZONE - Unit may be destroyed!';
+    } else if (threatLevel === 'danger') {
+      threatWarning = ' ⚠️ Under enemy fire';
+    }
+
+    // Show AP cost message with path length info and threat warning
     if (apCost > this.gameState.actionPoints) {
-      this.hud.showMessage(`Need ${apCost} AP${pathInfo} (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+      this.hud.showMessage(`Need ${apCost} AP${pathInfo} (have ${this.gameState.actionPoints})${threatWarning} - Click again to cancel`, 3000);
     } else {
-      this.hud.showMessage(`Move for ${apCost} AP${pathInfo} - Click again to confirm`, 3000);
+      this.hud.showMessage(`Move for ${apCost} AP${pathInfo}${threatWarning} - Click again to confirm`, 3000);
     }
   }
 
