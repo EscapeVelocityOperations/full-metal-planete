@@ -10,6 +10,8 @@ import {
   validateCaptureAction,
   validateBuildAction,
   calculateSavedAP,
+  validateRebuildTowerAction,
+  getAstronefPodeHex,
 } from '../actions';
 import {
   TerrainType,
@@ -24,6 +26,7 @@ import {
   type HexTerrain,
   type Player,
   type Mineral,
+  type TurretState,
 } from '../types';
 
 // Helper to create minimal unit for testing
@@ -1417,6 +1420,172 @@ describe('Action Edge Cases', () => {
       const result = validateCaptureAction(state, ['tank-1', 'tank-2'], 'nonexistent');
       expect(result.valid).toBe(false);
       expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('getAstronefPodeHex', () => {
+    it('should return correct hex for pode 0 (East)', () => {
+      const astronef = createUnit('astronef-1', UnitType.Astronef, 'p1', { q: 5, r: 5 });
+      const podeHex = getAstronefPodeHex(astronef, 0);
+      expect(podeHex).toEqual({ q: 6, r: 5 });
+    });
+
+    it('should return correct hex for pode 1 (Southeast)', () => {
+      const astronef = createUnit('astronef-1', UnitType.Astronef, 'p1', { q: 5, r: 5 });
+      const podeHex = getAstronefPodeHex(astronef, 1);
+      expect(podeHex).toEqual({ q: 5, r: 6 });
+    });
+
+    it('should return correct hex for pode 2 (Northeast)', () => {
+      const astronef = createUnit('astronef-1', UnitType.Astronef, 'p1', { q: 5, r: 5 });
+      const podeHex = getAstronefPodeHex(astronef, 2);
+      expect(podeHex).toEqual({ q: 6, r: 4 });
+    });
+
+    it('should return null for invalid pode index', () => {
+      const astronef = createUnit('astronef-1', UnitType.Astronef, 'p1', { q: 5, r: 5 });
+      expect(getAstronefPodeHex(astronef, -1)).toBeNull();
+      expect(getAstronefPodeHex(astronef, 3)).toBeNull();
+    });
+
+    it('should return null if astronef has no position', () => {
+      const astronef = createUnit('astronef-1', UnitType.Astronef, 'p1', { q: 0, r: 0 }, { position: undefined });
+      expect(getAstronefPodeHex(astronef, 0)).toBeNull();
+    });
+  });
+
+  describe('validateRebuildTowerAction', () => {
+    function createAstronef(
+      id: string,
+      owner: string,
+      position: HexCoord,
+      turrets: TurretState[],
+      overrides: Partial<Unit> = {}
+    ): Unit {
+      return createUnit(id, UnitType.Astronef, owner, position, {
+        turrets,
+        hasLiftedOff: false,
+        ...overrides,
+      });
+    }
+
+    it('should allow rebuilding a destroyed tower', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 0);
+
+      expect(result.valid).toBe(true);
+      expect(result.apCost).toBe(GAME_CONSTANTS.AP_COST_REBUILD_TOWER ?? 2);
+    });
+
+    it('should reject rebuilding a non-destroyed tower', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: false },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 0);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('not destroyed');
+    });
+
+    it('should reject rebuilding for non-existent astronef', () => {
+      const state = createGameState({ units: [], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'nonexistent', 0);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+
+    it('should reject rebuilding enemy astronef tower', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p2', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 0);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('own');
+    });
+
+    it('should reject rebuilding with insufficient AP', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 1 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 0);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('action points');
+    });
+
+    it('should reject rebuilding when astronef has lifted off', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p1', { q: 5, r: 5 }, turrets, {
+        hasLiftedOff: true,
+      });
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 0);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('lift-off');
+    });
+
+    it('should reject rebuilding when tower hex is under enemy fire', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      // Enemy tanks adjacent to pode 0 (which is at q: 6, r: 5)
+      const enemyTank1 = createUnit('tank-1', UnitType.Tank, 'p2', { q: 7, r: 5 });
+      const enemyTank2 = createUnit('tank-2', UnitType.Tank, 'p2', { q: 7, r: 4 });
+      const state = createGameState({ units: [astronef, enemyTank1, enemyTank2], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 0);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('fire');
+    });
+
+    it('should reject rebuilding for invalid pode index', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronef('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const result = validateRebuildTowerAction(state, 'astronef-1', 3);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid');
     });
   });
 });

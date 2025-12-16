@@ -19,6 +19,7 @@ import {
   type HexTerrain,
   type RetreatAction,
   type CaptureAstronefAction,
+  type RebuildTowerAction,
 } from './types';
 import { hexDistance, hexKey, hexNeighbors, getUnitFootprint, getOccupiedHexes } from './hex';
 import { canUnitEnterTerrain, getEffectiveTerrain } from './terrain';
@@ -967,4 +968,111 @@ function getAstronefOccupiedHexes(astronef: Unit): HexCoord[] {
     { q: center.q, r: center.r + 1 },     // Southeast
     { q: center.q + 1, r: center.r - 1 }, // Northeast
   ];
+}
+
+// ============================================================================
+// Tower Rebuilding
+// ============================================================================
+
+/**
+ * Get the hex position of a specific astronef pode (tower).
+ * Pod 0 = East, Pod 1 = Southeast, Pod 2 = Northeast
+ */
+export function getAstronefPodeHex(astronef: Unit, podeIndex: number): HexCoord | null {
+  if (!astronef.position) return null;
+  if (podeIndex < 0 || podeIndex > 2) return null;
+
+  const center = astronef.position;
+  switch (podeIndex) {
+    case 0: return { q: center.q + 1, r: center.r };     // East
+    case 1: return { q: center.q, r: center.r + 1 };     // Southeast
+    case 2: return { q: center.q + 1, r: center.r - 1 }; // Northeast
+    default: return null;
+  }
+}
+
+/**
+ * Validate a tower rebuild action.
+ *
+ * Rules for rebuilding a tower:
+ * 1. Only the current owner of the astronef can rebuild
+ * 2. The tower must be destroyed
+ * 3. The astronef must not be under enemy fire
+ * 4. Costs 2 AP per tower
+ * 5. Astronef must not have lifted off
+ */
+export function validateRebuildTowerAction(
+  state: GameState,
+  astronefId: string,
+  podeIndex: number
+): ValidationResult {
+  const apCost = GAME_CONSTANTS.AP_COST_REBUILD_TOWER ?? 2;
+
+  // Find the astronef
+  const astronef = state.units.find((u) => u.id === astronefId);
+  if (!astronef) {
+    return { valid: false, error: 'Astronef not found' };
+  }
+
+  // Check it's actually an astronef
+  if (astronef.type !== UnitType.Astronef) {
+    return { valid: false, error: 'Unit is not an astronef' };
+  }
+
+  // Check ownership - must be current player
+  if (astronef.owner !== state.currentPlayer) {
+    return { valid: false, error: 'Can only rebuild towers on your own astronef' };
+  }
+
+  // Check astronef hasn't lifted off
+  if (astronef.hasLiftedOff || astronef.position === null) {
+    return { valid: false, error: 'Cannot rebuild towers after lift-off' };
+  }
+
+  // Check podeIndex is valid (0, 1, 2)
+  if (podeIndex < 0 || podeIndex > 2) {
+    return { valid: false, error: 'Invalid pode index (must be 0, 1, or 2)' };
+  }
+
+  // Check turret data exists
+  if (!astronef.turrets) {
+    return { valid: false, error: 'Astronef has no turret data' };
+  }
+
+  // Check the specific tower is destroyed
+  const turret = astronef.turrets.find((t) => t.podeIndex === podeIndex);
+  if (!turret) {
+    return { valid: false, error: 'Tower not found' };
+  }
+
+  if (!turret.isDestroyed) {
+    return { valid: false, error: 'Tower is not destroyed - nothing to rebuild' };
+  }
+
+  // Check sufficient AP
+  if (state.actionPoints < apCost) {
+    return { valid: false, error: `Insufficient action points (need ${apCost})` };
+  }
+
+  // Check astronef is not under enemy fire
+  const getTerrainAt = createTerrainGetter(state.terrain);
+  const astronefHexes = getAstronefOccupiedHexes(astronef);
+
+  // Get all enemy players
+  const enemyPlayers = state.players
+    .filter((p) => p.id !== state.currentPlayer)
+    .map((p) => p.id);
+
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
+
+    // Check if any astronef hex is under fire
+    for (const astroHex of astronefHexes) {
+      if (underFire.has(hexKey(astroHex))) {
+        return { valid: false, error: 'Cannot rebuild towers while under enemy fire' };
+      }
+    }
+  }
+
+  return { valid: true, apCost };
 }

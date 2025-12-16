@@ -29,6 +29,7 @@ import {
   type DeployUnitAction,
   type ValidationResult,
   type CaptureAstronefAction,
+  type RebuildTowerAction,
 } from './types';
 import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP } from './actions';
 import { hexKey, hexNeighbors, hexEqual } from './hex';
@@ -763,6 +764,78 @@ export function applyBuildAction(state: GameState, action: BuildAction): GameSta
   };
 }
 
+/**
+ * Apply a tower rebuild action to the game state.
+ * Rebuilds a destroyed tower on the player's astronef.
+ */
+export function applyRebuildTowerAction(state: GameState, action: RebuildTowerAction): GameState {
+  const { astronefId, podeIndex, apCost } = action;
+
+  // Find the astronef
+  const astronef = state.units.find((u) => u.id === astronefId);
+  if (!astronef || !astronef.turrets) {
+    return state;
+  }
+
+  // Rebuild the tower (set isDestroyed to false)
+  const updatedTurrets: TurretState[] = astronef.turrets.map((turret) => {
+    if (turret.podeIndex === podeIndex) {
+      return { ...turret, isDestroyed: false };
+    }
+    return turret;
+  });
+
+  // Update the astronef with rebuilt turret
+  const updatedUnits = state.units.map((unit) => {
+    if (unit.id === astronefId) {
+      return { ...unit, turrets: updatedTurrets };
+    }
+    return unit;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+    actionPoints: state.actionPoints - apCost,
+  };
+}
+
+/**
+ * Apply a tower destruction to an astronef.
+ * Called when a fire action targets an astronef pode hex.
+ */
+export function applyTowerDestruction(
+  state: GameState,
+  astronefId: string,
+  podeIndex: number
+): GameState {
+  const astronef = state.units.find((u) => u.id === astronefId);
+  if (!astronef || !astronef.turrets) {
+    return state;
+  }
+
+  // Mark the tower as destroyed
+  const updatedTurrets: TurretState[] = astronef.turrets.map((turret) => {
+    if (turret.podeIndex === podeIndex) {
+      return { ...turret, isDestroyed: true };
+    }
+    return turret;
+  });
+
+  // Update the astronef
+  const updatedUnits = state.units.map((unit) => {
+    if (unit.id === astronefId) {
+      return { ...unit, turrets: updatedTurrets };
+    }
+    return unit;
+  });
+
+  return {
+    ...state,
+    units: updatedUnits,
+  };
+}
+
 // ============================================================================
 // Setup Phase Actions (Landing & Deployment)
 // ============================================================================
@@ -1034,6 +1107,146 @@ function getAstronefHexesForCapture(astronef: Unit): HexCoord[] {
   ];
 }
 
+// ============================================================================
+// Landing Zone Validation (Section 2.1)
+// ============================================================================
+
+/**
+ * Get the landing zone (1-8) for a hex based on its angle from map center.
+ * The board is divided into 8 pie-slice zones, numbered 1-8 clockwise from east.
+ */
+export function getLandingZone(hex: HexCoord, mapWidth: number = 37, mapHeight: number = 23): number {
+  const centerQ = mapWidth / 2;
+  const centerR = mapHeight / 2;
+
+  const dq = hex.q - centerQ;
+  const dr = hex.r - centerR;
+
+  // Calculate angle from center (atan2 gives angle in radians from -π to π)
+  let angle = Math.atan2(dr, dq);
+
+  // Convert to 0 to 2π range
+  if (angle < 0) angle += 2 * Math.PI;
+
+  // Divide circle into 8 zones (each zone is π/4 = 45 degrees)
+  // Offset by π/8 so zone boundaries align with cardinal/diagonal directions
+  const zoneIndex = Math.floor((angle + Math.PI / 8) / (Math.PI / 4)) % 8;
+
+  // Return 1-8 (zone index + 1)
+  return zoneIndex + 1;
+}
+
+/**
+ * Calculate the minimum circular distance between two landing zones.
+ * Since zones wrap around (zone 8 is adjacent to zone 1), the distance
+ * is the minimum of clockwise and counter-clockwise distances.
+ */
+export function getLandingZoneDistance(zone1: number, zone2: number): number {
+  const diff = Math.abs(zone1 - zone2);
+  // Circular distance: min of direct and wrap-around
+  return Math.min(diff, 8 - diff);
+}
+
+/**
+ * Get the landing zone for an astronef based on its center hex position.
+ */
+export function getAstronefLandingZone(astronefPosition: HexCoord[]): number {
+  // Use the center hex (first position) for zone calculation
+  if (astronefPosition.length === 0) return 0;
+  return getLandingZone(astronefPosition[0]);
+}
+
+/**
+ * Validate that a proposed astronef landing position is at least 2 zones away
+ * from all other landed astronefs.
+ */
+export function validateLandingZoneDistance(
+  state: GameState,
+  proposedPosition: HexCoord[],
+  playerId: string
+): ValidationResult {
+  if (proposedPosition.length === 0) {
+    return { valid: false, error: 'No landing position provided' };
+  }
+
+  const proposedZone = getLandingZone(proposedPosition[0]);
+
+  // Check against all other players' astronef positions
+  for (const player of state.players) {
+    // Skip self
+    if (player.id === playerId) continue;
+
+    // Skip players who haven't landed yet (empty array or only origin position)
+    if (player.astronefPosition.length === 0) continue;
+
+    // Check if astronef position is at origin (not yet landed)
+    const firstPos = player.astronefPosition[0];
+    if (firstPos && firstPos.q === 0 && firstPos.r === 0) continue;
+
+    // Also verify the astronef unit exists and is actually deployed
+    const astronef = state.units.find(
+      (u) => u.type === UnitType.Astronef && u.owner === player.id
+    );
+    // Skip if no astronef unit or astronef is still at origin
+    if (!astronef || (astronef.position && astronef.position.q === 0 && astronef.position.r === 0)) continue;
+
+    const otherZone = getAstronefLandingZone(player.astronefPosition);
+    const distance = getLandingZoneDistance(proposedZone, otherZone);
+
+    if (distance < 2) {
+      return {
+        valid: false,
+        error: `Landing zone ${proposedZone} is too close to ${player.name}'s astronef in zone ${otherZone} (minimum 2 zones apart)`,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Get available landing zones that are at least 2 zones away from all landed astronefs.
+ */
+export function getAvailableLandingZones(state: GameState, playerId: string): number[] {
+  const takenZones: number[] = [];
+
+  // Collect zones of already-landed astronefs
+  for (const player of state.players) {
+    if (player.id === playerId) continue;
+    if (player.astronefPosition.length === 0) continue;
+
+    // Check if astronef position is at origin (not yet landed)
+    const firstPos = player.astronefPosition[0];
+    if (firstPos && firstPos.q === 0 && firstPos.r === 0) continue;
+
+    // Also verify the astronef unit exists and is actually deployed
+    const astronef = state.units.find(
+      (u) => u.type === UnitType.Astronef && u.owner === player.id
+    );
+    // Skip if no astronef unit or astronef is still at origin
+    if (!astronef || (astronef.position && astronef.position.q === 0 && astronef.position.r === 0)) continue;
+
+    takenZones.push(getAstronefLandingZone(player.astronefPosition));
+  }
+
+  // Find zones that are at least 2 away from all taken zones
+  const availableZones: number[] = [];
+  for (let zone = 1; zone <= 8; zone++) {
+    const isFarEnough = takenZones.every(
+      (takenZone) => getLandingZoneDistance(zone, takenZone) >= 2
+    );
+    if (isFarEnough) {
+      availableZones.push(zone);
+    }
+  }
+
+  return availableZones;
+}
+
+// ============================================================================
+// Landing & Deployment Validation
+// ============================================================================
+
 /**
  * Validate astronef landing position.
  * Rules:
@@ -1041,7 +1254,7 @@ function getAstronefHexesForCapture(astronef: Unit): HexCoord[] {
  * - Player must not have already landed
  * - All 4 hexes must be on Land or Marsh terrain
  * - No other astronef can occupy those hexes
- * - Must be within player's assigned landing zone
+ * - Must be at least 2 zones away from other astronefs
  */
 export function validateLandAstronefAction(
   state: GameState,
@@ -1067,7 +1280,7 @@ export function validateLandAstronefAction(
   const playerAstronef = state.units.find(
     (u) => u.type === UnitType.Astronef && u.owner === action.playerId
   );
-  if (playerAstronef && playerAstronef.position.q !== 0) {
+  if (playerAstronef && playerAstronef.position && playerAstronef.position.q !== 0) {
     return { valid: false, error: 'Astronef already landed' };
   }
 
@@ -1098,6 +1311,7 @@ export function validateLandAstronefAction(
       (u) =>
         u.type === UnitType.Astronef &&
         u.owner !== action.playerId &&
+        u.position !== null &&
         u.position.q === hex.q &&
         u.position.r === hex.r
     );
@@ -1107,6 +1321,12 @@ export function validateLandAstronefAction(
         error: `Hex (${hex.q}, ${hex.r}) is already occupied by another astronef`,
       };
     }
+  }
+
+  // Validate landing zone distance (must be at least 2 zones apart)
+  const zoneValidation = validateLandingZoneDistance(state, action.position, action.playerId);
+  if (!zoneValidation.valid) {
+    return zoneValidation;
   }
 
   return { valid: true };

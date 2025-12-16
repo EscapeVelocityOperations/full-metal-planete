@@ -172,6 +172,92 @@ export function isHexUnderFire(
   return underFire.has(hexKey(hex));
 }
 
+/**
+ * Result of hex coverage analysis for UI visualization.
+ * Separates hexes into those covered by 1 unit (warning) vs 2+ units (danger/crossfire).
+ */
+export interface HexCoverageResult {
+  /** Hexes covered by exactly 1 combat unit (potential threat) */
+  singleCoverage: HexCoord[];
+  /** Hexes covered by 2+ combat units (crossfire/destruction zone) */
+  multiCoverage: HexCoord[];
+  /** Map of hex key to count of units covering that hex */
+  coverageMap: Map<string, number>;
+  /** Map of hex key to unit IDs covering that hex */
+  coveringUnits: Map<string, string[]>;
+}
+
+/**
+ * Get detailed coverage analysis of hexes under fire from a player's combat units.
+ * Unlike getHexesUnderFire which only returns 2+ coverage, this returns
+ * all coverage information for UI visualization.
+ */
+export function getHexCoverage(
+  units: Unit[],
+  playerId: string,
+  getTerrainAt: TerrainGetter
+): HexCoverageResult {
+  const coverageMap = new Map<string, number>();
+  const coveringUnits = new Map<string, string[]>();
+  const singleCoverage: HexCoord[] = [];
+  const multiCoverage: HexCoord[] = [];
+
+  // Get all active combat units for this player
+  const combatUnits = units.filter(
+    (u) =>
+      u.owner === playerId &&
+      UNIT_PROPERTIES[u.type].combatRange > 0 &&
+      !u.isStuck &&
+      !u.isNeutralized &&
+      u.shotsRemaining > 0 &&
+      u.position !== null
+  );
+
+  // Count coverage for each hex
+  for (const unit of combatUnits) {
+    if (!unit.position) continue;
+
+    const terrain = getTerrainAt(unit.position);
+    const range = getCombatRange(unit, terrain);
+    const reachableHexes = hexesInRange(unit.position, range);
+
+    for (const hex of reachableHexes) {
+      // Skip the unit's own hex
+      if (hex.q === unit.position.q && hex.r === unit.position.r) {
+        continue;
+      }
+
+      const key = hexKey(hex);
+      const currentCount = coverageMap.get(key) || 0;
+      coverageMap.set(key, currentCount + 1);
+
+      // Track which units cover this hex
+      const unitIds = coveringUnits.get(key) || [];
+      unitIds.push(unit.id);
+      coveringUnits.set(key, unitIds);
+    }
+  }
+
+  // Categorize hexes by coverage level
+  for (const [key, count] of coverageMap) {
+    const [q, r] = key.split(',').map(Number);
+    const hex: HexCoord = { q, r };
+
+    if (count >= GAME_CONSTANTS.UNITS_REQUIRED_TO_DESTROY) {
+      multiCoverage.push(hex);
+    } else if (count === 1) {
+      singleCoverage.push(hex);
+    }
+  }
+
+  return {
+    singleCoverage,
+    multiCoverage,
+    coverageMap,
+    coveringUnits,
+  };
+}
+
 // ============================================================================
 // Destruction Rules
 // ============================================================================

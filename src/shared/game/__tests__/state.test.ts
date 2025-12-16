@@ -28,6 +28,8 @@ import {
   haveAllPlayersDeployed,
   getUndeployedUnits,
   getAstronefHexes,
+  applyRebuildTowerAction,
+  applyTowerDestruction,
 } from '../state';
 import {
   TerrainType,
@@ -51,6 +53,8 @@ import {
   type EndTurnAction,
   type LandAstronefAction,
   type DeployUnitAction,
+  type TurretState,
+  type RebuildTowerAction,
 } from '../types';
 
 // Helper to create minimal unit for testing
@@ -1986,6 +1990,162 @@ describe('Astronef and Tower Creation', () => {
       const undeployed = getUndeployedUnits(state, 'p1');
 
       expect(undeployed).toHaveLength(0);
+    });
+  });
+
+  describe('applyTowerDestruction', () => {
+    function createAstronefWithTurrets(
+      id: string,
+      owner: string,
+      position: HexCoord,
+      turrets: TurretState[]
+    ): Unit {
+      return createUnit(id, UnitType.Astronef, owner, position, {
+        turrets,
+        hasLiftedOff: false,
+      });
+    }
+
+    it('should mark a turret as destroyed', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: false },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronefWithTurrets('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef] });
+
+      const newState = applyTowerDestruction(state, 'astronef-1', 0);
+
+      const updatedAstronef = newState.units.find((u) => u.id === 'astronef-1');
+      expect(updatedAstronef?.turrets?.[0].isDestroyed).toBe(true);
+      expect(updatedAstronef?.turrets?.[1].isDestroyed).toBe(false);
+      expect(updatedAstronef?.turrets?.[2].isDestroyed).toBe(false);
+    });
+
+    it('should preserve other turrets when destroying one', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronefWithTurrets('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef] });
+
+      const newState = applyTowerDestruction(state, 'astronef-1', 2);
+
+      const updatedAstronef = newState.units.find((u) => u.id === 'astronef-1');
+      expect(updatedAstronef?.turrets?.[0].isDestroyed).toBe(true);
+      expect(updatedAstronef?.turrets?.[1].isDestroyed).toBe(false);
+      expect(updatedAstronef?.turrets?.[2].isDestroyed).toBe(true);
+    });
+
+    it('should return unchanged state for non-existent astronef', () => {
+      const state = createGameState({ units: [] });
+
+      const newState = applyTowerDestruction(state, 'nonexistent', 0);
+
+      expect(newState).toEqual(state);
+    });
+  });
+
+  describe('applyRebuildTowerAction', () => {
+    function createAstronefWithTurrets(
+      id: string,
+      owner: string,
+      position: HexCoord,
+      turrets: TurretState[]
+    ): Unit {
+      return createUnit(id, UnitType.Astronef, owner, position, {
+        turrets,
+        hasLiftedOff: false,
+      });
+    }
+
+    it('should rebuild a destroyed tower and deduct AP', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: false },
+        { podeIndex: 2, isDestroyed: false },
+      ];
+      const astronef = createAstronefWithTurrets('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const action: RebuildTowerAction = {
+        type: 'REBUILD_TOWER',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        astronefId: 'astronef-1',
+        podeIndex: 0,
+        apCost: GAME_CONSTANTS.AP_COST_REBUILD_TOWER ?? 2,
+      };
+
+      const newState = applyRebuildTowerAction(state, action);
+
+      const updatedAstronef = newState.units.find((u) => u.id === 'astronef-1');
+      expect(updatedAstronef?.turrets?.[0].isDestroyed).toBe(false);
+      expect(newState.actionPoints).toBe(5 - (GAME_CONSTANTS.AP_COST_REBUILD_TOWER ?? 2));
+    });
+
+    it('should only rebuild the specified turret', () => {
+      const turrets: TurretState[] = [
+        { podeIndex: 0, isDestroyed: true },
+        { podeIndex: 1, isDestroyed: true },
+        { podeIndex: 2, isDestroyed: true },
+      ];
+      const astronef = createAstronefWithTurrets('astronef-1', 'p1', { q: 5, r: 5 }, turrets);
+      const state = createGameState({ units: [astronef], actionPoints: 10 });
+
+      const action: RebuildTowerAction = {
+        type: 'REBUILD_TOWER',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        astronefId: 'astronef-1',
+        podeIndex: 1,
+        apCost: 2,
+      };
+
+      const newState = applyRebuildTowerAction(state, action);
+
+      const updatedAstronef = newState.units.find((u) => u.id === 'astronef-1');
+      expect(updatedAstronef?.turrets?.[0].isDestroyed).toBe(true);
+      expect(updatedAstronef?.turrets?.[1].isDestroyed).toBe(false);
+      expect(updatedAstronef?.turrets?.[2].isDestroyed).toBe(true);
+    });
+
+    it('should return unchanged state for non-existent astronef', () => {
+      const state = createGameState({ units: [], actionPoints: 5 });
+
+      const action: RebuildTowerAction = {
+        type: 'REBUILD_TOWER',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        astronefId: 'nonexistent',
+        podeIndex: 0,
+        apCost: 2,
+      };
+
+      const newState = applyRebuildTowerAction(state, action);
+
+      expect(newState).toEqual(state);
+    });
+
+    it('should return unchanged state for astronef without turrets', () => {
+      const astronef = createUnit('astronef-1', UnitType.Astronef, 'p1', { q: 5, r: 5 });
+      const state = createGameState({ units: [astronef], actionPoints: 5 });
+
+      const action: RebuildTowerAction = {
+        type: 'REBUILD_TOWER',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        astronefId: 'astronef-1',
+        podeIndex: 0,
+        apCost: 2,
+      };
+
+      const newState = applyRebuildTowerAction(state, action);
+
+      expect(newState).toEqual(state);
     });
   });
 });
