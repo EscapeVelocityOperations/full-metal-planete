@@ -4,17 +4,25 @@ import websocket from '@fastify/websocket';
 import { nanoid } from 'nanoid';
 import { Room } from './room.js';
 import { WebSocketHandler } from './websocket.js';
-import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameStatusResponse } from './types.js';
+import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameStatusResponse, GameRoom } from './types.js';
+import type { GameStorage } from './storage/types.js';
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
 // Client URL for game links (same as Vite dev server in dev, production URL in prod)
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:10000';
 
-export function createServer() {
+export function createServer(storage?: GameStorage) {
   const fastify = Fastify({ logger: true });
   const rooms = new Map<string, Room>();
-  const wsHandler = new WebSocketHandler();
+  const wsHandler = new WebSocketHandler(storage);
+
+  // Load existing games from storage on startup
+  if (storage) {
+    loadGamesFromStorage(storage, rooms).catch(err => {
+      fastify.log.error('Failed to load games from storage:', err);
+    });
+  }
 
   fastify.register(cors, {
     origin: true,
@@ -107,6 +115,11 @@ export function createServer() {
     const room = new Room(gameId, hostPlayer);
     rooms.set(gameId, room);
 
+    // Persist to storage
+    if (storage) {
+      await storage.saveRoom(roomToStorable(room));
+    }
+
     // Generate simple token (in production, use JWT)
     const playerToken = Buffer.from(`${gameId}:${playerId}`).toString('base64');
 
@@ -167,6 +180,11 @@ export function createServer() {
       return reply.status(400).send({ error: (error as Error).message });
     }
 
+    // Persist to storage
+    if (storage) {
+      await storage.saveRoom(roomToStorable(room));
+    }
+
     const playerToken = Buffer.from(`${id}:${playerId}`).toString('base64');
 
     const response: JoinGameResponse = {
@@ -215,17 +233,26 @@ export function createServer() {
   /**
    * Cleanup old rooms periodically
    */
-  const cleanupInterval = setInterval(() => {
+  const cleanupInterval = setInterval(async () => {
     const now = Date.now();
     const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+    const finishedMaxAge = 60 * 60 * 1000; // 1 hour for finished games
 
-    rooms.forEach((room, id) => {
+    for (const [id, room] of rooms) {
       const age = now - room.createdAt.getTime();
-      if (age > maxAge || (room.state === 'finished' && age > 60 * 60 * 1000)) {
+      if (age > maxAge || (room.state === 'finished' && age > finishedMaxAge)) {
         wsHandler.closeRoom(id);
         rooms.delete(id);
+        // Also delete from storage
+        if (storage) {
+          try {
+            await storage.deleteRoom(id);
+          } catch (err) {
+            fastify.log.error(`Failed to delete room ${id} from storage: ${err}`);
+          }
+        }
       }
-    });
+    }
   }, 60 * 60 * 1000); // Every hour
 
   fastify.addHook('onClose', () => {
@@ -234,4 +261,70 @@ export function createServer() {
   });
 
   return fastify;
+}
+
+/**
+ * Convert Room instance to storable format
+ */
+function roomToStorable(room: Room): GameRoom {
+  return {
+    id: room.id,
+    state: room.state,
+    hostId: room.hostId,
+    players: room.players.map(p => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      isReady: p.isReady,
+      isConnected: p.isConnected,
+      lastSeen: p.lastSeen,
+    })),
+    createdAt: room.createdAt,
+    gameState: room.gameState,
+  };
+}
+
+/**
+ * Load active games from storage into memory
+ */
+async function loadGamesFromStorage(storage: GameStorage, rooms: Map<string, Room>): Promise<void> {
+  // Load rooms that are waiting, ready, or playing (not finished)
+  const activeStates = ['waiting', 'ready', 'playing'];
+
+  for (const state of activeStates) {
+    const gameMetadataList = await storage.listRooms(state);
+
+    for (const metadata of gameMetadataList) {
+      if (rooms.has(metadata.gameId)) continue;
+
+      const storedRoom = await storage.getRoom(metadata.gameId);
+      if (!storedRoom || storedRoom.players.length === 0) continue;
+
+      // Recreate Room from stored data
+      const hostPlayer = storedRoom.players[0];
+      const room = new Room(storedRoom.id, hostPlayer);
+
+      // Add remaining players
+      for (let i = 1; i < storedRoom.players.length; i++) {
+        try {
+          room.addPlayer(storedRoom.players[i]);
+        } catch {
+          // Player already added or room full
+        }
+      }
+
+      // Restore state
+      for (const player of storedRoom.players) {
+        room.setPlayerReady(player.id, player.isReady);
+      }
+
+      // Restore game state if game was in progress
+      if (storedRoom.gameState) {
+        room.startGame(storedRoom.gameState);
+      }
+
+      rooms.set(storedRoom.id, room);
+      console.log(`Restored game ${storedRoom.id} from storage (state: ${storedRoom.state})`);
+    }
+  }
 }

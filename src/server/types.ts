@@ -19,6 +19,7 @@ export type WSMessageType =
   | 'PLAYER_JOINED'
   | 'PLAYER_LEFT'
   | 'PLAYER_READY'
+  | 'PLAYER_RECONNECTED'
   | 'GAME_START'
   | 'ACTION'
   | 'STATE_UPDATE'

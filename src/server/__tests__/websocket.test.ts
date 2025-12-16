@@ -15,6 +15,14 @@ class MockWebSocket {
     this.listeners.get(event)!.push(listener);
   }
 
+  removeAllListeners(event?: string) {
+    if (event) {
+      this.listeners.delete(event);
+    } else {
+      this.listeners.clear();
+    }
+  }
+
   send(data: string) {
     // Mock send
   }
@@ -346,6 +354,167 @@ describe('WebSocketHandler', () => {
       expect(() => {
         wsHandler.stopPingInterval();
       }).not.toThrow();
+    });
+  });
+
+  describe('Reconnection Handling', () => {
+    it('should send RECONNECT message when player reconnects to active game', () => {
+      // Setup: create 2 players, start game, disconnect one
+      const player2: Player = {
+        id: 'p2-abc',
+        name: 'Bob',
+        color: 'blue',
+        isReady: false,
+        isConnected: false,
+        lastSeen: new Date(),
+      };
+
+      room.addPlayer(player2);
+      room.setPlayerReady('p1-xyz', true);
+      room.setPlayerReady('p2-abc', true);
+      room.checkReadyState();
+
+      // Manually set room state to playing (simulating game start)
+      room.state = 'playing';
+      room.gameState = { currentPlayer: 'p1-xyz', turn: 1 } as any;
+
+      // Connect player 1
+      const ws1 = new MockWebSocket() as any;
+      wsHandler.handleConnection(ws1, room, 'p1-xyz');
+      expect(room.getPlayer('p1-xyz')?.isConnected).toBe(true);
+
+      // Disconnect player 1
+      ws1.close();
+      expect(room.getPlayer('p1-xyz')?.isConnected).toBe(false);
+
+      // Reconnect player 1
+      const ws1New = new MockWebSocket() as any;
+      const spy = vi.spyOn(ws1New, 'send');
+
+      wsHandler.handleConnection(ws1New, room, 'p1-xyz');
+
+      // Should receive RECONNECT message
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('RECONNECT'));
+      expect(room.getPlayer('p1-xyz')?.isConnected).toBe(true);
+    });
+
+    it('should broadcast PLAYER_RECONNECTED to other players', () => {
+      const player2: Player = {
+        id: 'p2-abc',
+        name: 'Bob',
+        color: 'blue',
+        isReady: false,
+        isConnected: false,
+        lastSeen: new Date(),
+      };
+
+      room.addPlayer(player2);
+
+      // Manually set room state to playing
+      room.state = 'playing';
+      room.gameState = { currentPlayer: 'p1-xyz', turn: 1 } as any;
+
+      // Connect both players
+      const ws1 = new MockWebSocket() as any;
+      const ws2 = new MockWebSocket() as any;
+      wsHandler.handleConnection(ws1, room, 'p1-xyz');
+      wsHandler.handleConnection(ws2, room, 'p2-abc');
+
+      // Disconnect player 1
+      ws1.close();
+
+      // Reconnect player 1
+      const ws1New = new MockWebSocket() as any;
+      const spy2 = vi.spyOn(ws2, 'send');
+      spy2.mockClear();
+
+      wsHandler.handleConnection(ws1New, room, 'p1-xyz');
+
+      // Player 2 should receive PLAYER_RECONNECTED
+      expect(spy2).toHaveBeenCalledWith(expect.stringContaining('PLAYER_RECONNECTED'));
+    });
+
+    it('should replace stale connection on reconnect', () => {
+      const ws1 = new MockWebSocket() as any;
+      const closeSpy = vi.spyOn(ws1, 'close');
+
+      wsHandler.handleConnection(ws1, room, 'p1-xyz');
+      expect(wsHandler.getConnectionCount('abc123')).toBe(1);
+
+      // Connect again with new socket (simulating reconnection without proper disconnect)
+      const ws1New = new MockWebSocket() as any;
+      wsHandler.handleConnection(ws1New, room, 'p1-xyz');
+
+      // Old connection should be closed
+      expect(closeSpy).toHaveBeenCalled();
+      // Should still have 1 connection
+      expect(wsHandler.getConnectionCount('abc123')).toBe(1);
+    });
+
+    it('should provide connection status helpers', () => {
+      const player2: Player = {
+        id: 'p2-abc',
+        name: 'Bob',
+        color: 'blue',
+        isReady: false,
+        isConnected: false,
+        lastSeen: new Date(),
+      };
+      room.addPlayer(player2);
+
+      const ws1 = new MockWebSocket() as any;
+      const ws2 = new MockWebSocket() as any;
+
+      wsHandler.handleConnection(ws1, room, 'p1-xyz');
+      wsHandler.handleConnection(ws2, room, 'p2-abc');
+
+      // Check connected players list
+      const connected = wsHandler.getConnectedPlayers('abc123');
+      expect(connected).toContain('p1-xyz');
+      expect(connected).toContain('p2-abc');
+      expect(connected.length).toBe(2);
+
+      // Check individual player connection status
+      expect(wsHandler.isPlayerConnected('abc123', 'p1-xyz')).toBe(true);
+      expect(wsHandler.isPlayerConnected('abc123', 'p2-abc')).toBe(true);
+      expect(wsHandler.isPlayerConnected('abc123', 'p3-unknown')).toBe(false);
+      expect(wsHandler.isPlayerConnected('nonexistent', 'p1-xyz')).toBe(false);
+    });
+
+    it('should include disconnect context in PLAYER_LEFT message', () => {
+      const player2: Player = {
+        id: 'p2-abc',
+        name: 'Bob',
+        color: 'blue',
+        isReady: false,
+        isConnected: false,
+        lastSeen: new Date(),
+      };
+      room.addPlayer(player2);
+
+      // Set up playing state
+      room.state = 'playing';
+      room.gameState = { currentPlayer: 'p1-xyz', turn: 1 } as any;
+
+      const ws1 = new MockWebSocket() as any;
+      const ws2 = new MockWebSocket() as any;
+      wsHandler.handleConnection(ws1, room, 'p1-xyz');
+      wsHandler.handleConnection(ws2, room, 'p2-abc');
+
+      const spy2 = vi.spyOn(ws2, 'send');
+      spy2.mockClear();
+
+      // Disconnect player 1 (whose turn it is)
+      ws1.close();
+
+      // Player 2 should receive PLAYER_LEFT with context
+      expect(spy2).toHaveBeenCalled();
+      const sentData = spy2.mock.calls[0][0] as string;
+      const message = JSON.parse(sentData);
+      expect(message.type).toBe('PLAYER_LEFT');
+      expect(message.payload.isActiveGame).toBe(true);
+      expect(message.payload.isCurrentPlayersTurn).toBe(true);
+      expect(message.payload.canReconnect).toBe(true);
     });
   });
 });
