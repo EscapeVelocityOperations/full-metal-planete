@@ -11,6 +11,16 @@ export interface WSMessage {
   playerId?: string;
 }
 
+export interface LiftOffDecisionAck {
+  decision: boolean;
+  pendingPlayers: number;
+}
+
+export interface LiftOffDecisionsRevealed {
+  decisions: Record<string, { decision: boolean; liftedOff: boolean; playerName: string }>;
+  gameState: GameState;
+}
+
 export interface GameClientEvents {
   connected: () => void;
   disconnected: () => void;
@@ -26,6 +36,8 @@ export interface GameClientEvents {
   gameEnd: (scores: Record<string, number>) => void;
   error: (error: { code: string; message: string }) => void;
   stateUpdate: (gameState: Partial<GameState>) => void;
+  liftOffDecisionAck: (data: LiftOffDecisionAck) => void;
+  liftOffDecisionsRevealed: (data: LiftOffDecisionsRevealed) => void;
 }
 
 export class GameClient {
@@ -153,6 +165,14 @@ export class GameClient {
           this.sendPong();
           break;
 
+        case 'LIFTOFF_DECISION_ACK':
+          this.emit('liftOffDecisionAck', message.payload);
+          break;
+
+        case 'LIFTOFF_DECISIONS_REVEALED':
+          this.emit('liftOffDecisionsRevealed', message.payload);
+          break;
+
         default:
           console.warn('Unknown message type:', message.type);
       }
@@ -212,6 +232,18 @@ export class GameClient {
     this.send({
       type: 'SYNC_REQUEST',
       payload: {},
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Send lift-off decision (Turn 21 secret decision)
+   * @param decision true = lift off now, false = stay until turn 25
+   */
+  sendLiftOffDecision(decision: boolean): void {
+    this.send({
+      type: 'LIFTOFF_DECISION',
+      payload: { decision },
       timestamp: Date.now(),
     });
   }

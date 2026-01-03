@@ -14,7 +14,8 @@ import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainG
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
 import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, type TerrainGetter } from '@/shared/game/combat';
-import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, setLiftOffDecision } from '@/shared/game/state';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners } from '@/shared/game/state';
+import type { LiftOffDecisionAck, LiftOffDecisionsRevealed } from './game-client';
 
 export interface GameConfig {
   gameId: string;
@@ -163,6 +164,16 @@ export class GameApp {
     this.client.on('error', (error: { code: string; message: string }) => {
       console.error('Game error', error);
       this.hud.showMessage(`Error: ${error.message}`, 5000);
+    });
+
+    this.client.on('liftOffDecisionAck', (data: LiftOffDecisionAck) => {
+      console.log('Lift-off decision acknowledged', data);
+      this.handleLiftOffDecisionAck(data);
+    });
+
+    this.client.on('liftOffDecisionsRevealed', (data: LiftOffDecisionsRevealed) => {
+      console.log('Lift-off decisions revealed', data);
+      this.handleLiftOffDecisionsRevealed(data);
     });
 
     this.hud.onEndTurn(() => {
@@ -1624,34 +1635,63 @@ export class GameApp {
 
   /**
    * Handle Turn 21 lift-off decision (secret decision)
+   * Sends decision to server - actual lift-off happens when all players have decided
    */
   private handleLiftOffDecision(decision: boolean): void {
     if (!this.gameState) return;
 
-    const playerId = this.client['playerId'];
-    const actionDecision: 'now' | 'stay' = decision ? 'now' : 'stay';
-    this.gameState = setLiftOffDecision(this.gameState, playerId, decision);
+    // Send decision to server (server handles the secret collection and reveal)
+    this.client.sendLiftOffDecision(decision);
 
-    // Send decision to server (uses same LIFT_OFF action type)
-    this.client.sendAction({
-      type: 'LIFT_OFF',
-      playerId,
-      decision: actionDecision,
-      timestamp: Date.now(),
-    });
-
+    // Hide the decision modal - waiting state will be shown when ACK received
     this.hud.hideLiftOffDecision();
+  }
 
-    if (decision) {
-      // Execute lift-off immediately if they chose 'now'
-      this.gameState = executeLiftOff(this.gameState, playerId);
-      this.hud.hideLiftOffButton();
-      this.hud.showMessage('Astronef lifted off!', 3000);
-      this.updateGameState(this.gameState);
-      this.checkGameOver();
+  /**
+   * Handle acknowledgment that our lift-off decision was recorded
+   */
+  private handleLiftOffDecisionAck(data: LiftOffDecisionAck): void {
+    const decisionText = data.decision ? 'Lift off now' : 'Stay until turn 25';
+
+    if (data.pendingPlayers > 0) {
+      // Show waiting state
+      this.hud.showLiftOffWaiting(data.pendingPlayers);
+      this.hud.showMessage(`Decision recorded: ${decisionText}. Waiting for ${data.pendingPlayers} player(s)...`, 5000);
     } else {
-      this.hud.showMessage('You decided to stay on the planet.', 3000);
+      // All decisions in - reveal will come shortly
+      this.hud.showMessage(`Decision recorded: ${decisionText}. Revealing all decisions...`, 2000);
     }
+  }
+
+  /**
+   * Handle reveal of all players' lift-off decisions
+   */
+  private handleLiftOffDecisionsRevealed(data: LiftOffDecisionsRevealed): void {
+    // Hide waiting UI
+    this.hud.hideLiftOffWaiting();
+    this.hud.hideLiftOffButton();
+
+    // Update game state with the processed state from server
+    this.gameState = data.gameState;
+    this.updateGameState(data.gameState);
+
+    // Build reveal message
+    const liftedOff: string[] = [];
+    const stayed: string[] = [];
+
+    for (const [, info] of Object.entries(data.decisions)) {
+      if (info.decision) {
+        liftedOff.push(info.playerName);
+      } else {
+        stayed.push(info.playerName);
+      }
+    }
+
+    // Show reveal modal with all decisions
+    this.hud.showLiftOffReveal(data.decisions);
+
+    // Check game over
+    this.checkGameOver();
   }
 
   /**

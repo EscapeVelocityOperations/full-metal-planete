@@ -32,7 +32,10 @@ export type WSMessageType =
   | 'READY'
   | 'END_TURN'
   | 'RECONNECT'
-  | 'SYNC_REQUEST';
+  | 'SYNC_REQUEST'
+  | 'LIFTOFF_DECISION'
+  | 'LIFTOFF_DECISION_ACK'
+  | 'LIFTOFF_DECISIONS_REVEALED';
 
 // Action types from game
 export type ActionType =
