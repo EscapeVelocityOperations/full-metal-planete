@@ -29,6 +29,7 @@ import {
   type DeployUnitAction,
   type ValidationResult,
   type CaptureAstronefAction,
+  type RebuildTowerAction,
 } from './types';
 import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP } from './actions';
 import { hexKey, hexNeighbors, hexEqual } from './hex';
@@ -663,12 +664,41 @@ export function applyFireAction(state: GameState, action: FireAction): GameState
     (u) => u.position.q === action.targetHex.q && u.position.r === action.targetHex.r
   );
 
+  // Check if we're destroying a Tower - need to mark the astronef's turret as destroyed
+  let towerPodeIndex: number | null = null;
+  let towerOwner: string | null = null;
+  if (targetUnit?.type === UnitType.Tower) {
+    // Extract pode index from tower ID (format: tower-{playerId}-{podeIndex})
+    const match = targetUnit.id.match(/tower-.*-(\d)/);
+    if (match) {
+      towerPodeIndex = parseInt(match[1], 10);
+      towerOwner = targetUnit.owner;
+    }
+  }
+
   // Remove destroyed unit and decrement shots
+  // Also mark the turret as destroyed on the astronef if we destroyed a tower
   const updatedUnits = state.units
     .filter((u) => u.id !== targetUnit?.id)
     .map((unit) => {
+      // Decrement shots for attackers
       if (action.attackerIds.includes(unit.id)) {
         return { ...unit, shotsRemaining: unit.shotsRemaining - 1 };
+      }
+      // Mark turret as destroyed on the astronef
+      if (
+        towerPodeIndex !== null &&
+        towerOwner !== null &&
+        unit.type === UnitType.Astronef &&
+        unit.owner === towerOwner &&
+        unit.turrets
+      ) {
+        const updatedTurrets = unit.turrets.map((turret) =>
+          turret.podeIndex === towerPodeIndex
+            ? { ...turret, isDestroyed: true }
+            : turret
+        );
+        return { ...unit, turrets: updatedTurrets };
       }
       return unit;
     });
@@ -694,6 +724,56 @@ export function applyCaptureAction(state: GameState, action: CaptureAction): Gam
   return {
     ...state,
     units: updatedUnits,
+    actionPoints: state.actionPoints - action.apCost,
+  };
+}
+
+/**
+ * Apply a rebuild tower action to the game state.
+ *
+ * This restores a destroyed tower on an astronef:
+ * 1. Marks the turret as not destroyed on the astronef
+ * 2. Creates a new Tower unit at the pode position
+ * 3. Deducts 2 AP
+ */
+export function applyRebuildTowerAction(state: GameState, action: RebuildTowerAction): GameState {
+  // Find the astronef
+  const astronef = state.units.find((u) => u.id === action.astronefId);
+  if (!astronef || !astronef.turrets || !astronef.position) return state;
+
+  // Get the pode position for the tower
+  const podePosition = getPodeHex(astronef, action.podeIndex);
+  if (!podePosition) return state;
+
+  // Create the new tower
+  const towerId = `tower-${astronef.owner}-${action.podeIndex}`;
+  const newTower: Unit = {
+    id: towerId,
+    type: UnitType.Tower,
+    owner: astronef.owner,
+    position: podePosition,
+    shotsRemaining: UNIT_PROPERTIES[UnitType.Tower].maxShots || 2,
+    isStuck: false,
+    isNeutralized: false,
+  };
+
+  // Update astronef's turret state
+  const updatedTurrets = astronef.turrets.map((turret) =>
+    turret.podeIndex === action.podeIndex
+      ? { ...turret, isDestroyed: false }
+      : turret
+  );
+
+  // Update units: modify astronef turrets and add the new tower
+  const updatedUnits = state.units.map((unit) =>
+    unit.id === astronef.id
+      ? { ...unit, turrets: updatedTurrets }
+      : unit
+  );
+
+  return {
+    ...state,
+    units: [...updatedUnits, newTower],
     actionPoints: state.actionPoints - action.apCost,
   };
 }
