@@ -1186,6 +1186,160 @@
         color: #ffaa00;
         font-weight: bold;
       }
+
+      /* Mineral Stats Panel */
+      .mineral-stats-panel {
+        position: absolute;
+        top: 80px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.9);
+        border: 2px solid #e55a3c;
+        border-radius: 12px;
+        min-width: 260px;
+        z-index: 16;
+      }
+
+      .mineral-stats-panel.hidden {
+        display: none;
+      }
+
+      .mineral-stats-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 16px;
+        background: rgba(229, 90, 60, 0.2);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px 10px 0 0;
+      }
+
+      .mineral-stats-title {
+        font-size: 12px;
+        font-weight: bold;
+        color: #e55a3c;
+        letter-spacing: 1px;
+      }
+
+      .mineral-stats-toggle {
+        background: none;
+        border: none;
+        color: #888;
+        cursor: pointer;
+        font-size: 12px;
+        padding: 4px;
+      }
+
+      .mineral-stats-toggle:hover {
+        color: #fff;
+      }
+
+      .mineral-stats-content {
+        padding: 12px;
+        transition: max-height 0.3s ease, padding 0.3s ease;
+      }
+
+      .mineral-stats-content.collapsed {
+        max-height: 0;
+        padding: 0 12px;
+        overflow: hidden;
+      }
+
+      .mineral-summary {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .mineral-stat {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        flex: 1;
+      }
+
+      .mineral-stat-label {
+        font-size: 10px;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .mineral-stat-value {
+        font-size: 16px;
+        font-weight: bold;
+        color: #fff;
+      }
+
+      .mineral-stat-value.underwater {
+        color: #6b8cae;
+      }
+
+      .mineral-stat-value.underwater.warning {
+        color: #ff8c4a;
+      }
+
+      .mineral-stat-value.collected {
+        color: #44aa44;
+      }
+
+      .mineral-distribution {
+        margin-top: 8px;
+      }
+
+      .mineral-dist-label {
+        font-size: 10px;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+      }
+
+      .mineral-bars {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .mineral-bar-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .mineral-bar-player {
+        font-size: 12px;
+        font-weight: bold;
+        min-width: 60px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mineral-bar-track {
+        flex: 1;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .mineral-bar-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.3s ease;
+        min-width: 2px;
+      }
+
+      .mineral-bar-count {
+        font-size: 12px;
+        font-weight: bold;
+        color: #e55a3c;
+        min-width: 20px;
+        text-align: right;
+      }
     </style>
   </head>
   <body>
