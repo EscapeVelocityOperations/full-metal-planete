@@ -299,7 +299,7 @@ export function isAstronefAffectedByTide(): boolean {
 }
 
 // ============================================================================
-// Bridge Rules
+// Bridge Rules (Section 9)
 // ============================================================================
 
 /**
@@ -314,6 +314,10 @@ export function canPlaceBridge(terrain: TerrainType, tide: TideLevel): boolean {
 /**
  * Check if terrain with a bridge is still valid.
  * Bridges are destroyed if connecting land/bridge is submerged.
+ *
+ * Per rules Section 9.3:
+ * - Bridge is destroyed if connecting bridge hex is destroyed
+ * - Bridge is destroyed if connecting land hex is submerged by tide
  */
 export function isBridgeValid(
   baseTerrain: TerrainType,
@@ -325,7 +329,70 @@ export function isBridgeValid(
     return false;
   }
 
-  // Bridge survives as long as base terrain is sea (or becomes sea)
-  // and its connection remains valid
+  // Bridge survives as long as its connection remains valid
   return true;
+}
+
+/**
+ * Check if a unit can enter a hex that has a bridge.
+ *
+ * Per rules Section 9.2:
+ * - Bridge makes hex count as land (any player can use)
+ * - Bridges block Barges and Motor Boats (sea units cannot enter)
+ */
+export function canUnitEnterBridgedHex(unitType: UnitType): boolean {
+  const props = UNIT_PROPERTIES[unitType];
+
+  // Fixed and inert units cannot move normally
+  if (props.domain === 'fixed' || props.domain === 'none') {
+    return false;
+  }
+
+  // Land units can enter bridged hexes (bridge creates land)
+  if (props.domain === 'land') {
+    return true;
+  }
+
+  // Sea units (Barges, Motor Boats) cannot enter bridged hexes
+  // Per rules: "Blocks Barges and Motor Boats"
+  if (props.domain === 'sea') {
+    return false;
+  }
+
+  return false;
+}
+
+/**
+ * Get effective terrain considering bridge presence.
+ * When a bridge is present, sea hexes become land.
+ */
+export function getEffectiveTerrainWithBridge(
+  terrain: TerrainType,
+  tide: TideLevel,
+  hasBridge: boolean
+): EffectiveTerrainType {
+  // Bridge makes the hex count as land
+  if (hasBridge) {
+    return 'land';
+  }
+  return getEffectiveTerrain(terrain, tide);
+}
+
+/**
+ * Check if a hex is adjacent to land or another bridge.
+ * Used for bridge placement validation.
+ */
+export function isAdjacentToLandOrBridge(
+  neighbors: Array<{ terrain: TerrainType; hasBridge: boolean }>,
+  tide: TideLevel
+): boolean {
+  return neighbors.some((neighbor) => {
+    // If neighbor has a bridge, it counts as land
+    if (neighbor.hasBridge) {
+      return true;
+    }
+    // Check if neighbor terrain is land at current tide
+    const effectiveTerrain = getEffectiveTerrain(neighbor.terrain, tide);
+    return effectiveTerrain === 'land';
+  });
 }

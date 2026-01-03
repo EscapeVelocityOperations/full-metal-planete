@@ -9,6 +9,7 @@ import {
   TerrainType,
   UnitType,
   GamePhase,
+  TideLevel,
   UNIT_PROPERTIES,
   GAME_CONSTANTS,
   UNIT_SHAPES,
@@ -19,9 +20,19 @@ import {
   type HexTerrain,
   type RetreatAction,
   type CaptureAstronefAction,
+  type PlaceBridgeAction,
+  type PickupBridgeAction,
 } from './types';
 import { hexDistance, hexKey, hexNeighbors, getUnitFootprint, getOccupiedHexes } from './hex';
-import { canUnitEnterTerrain, getEffectiveTerrain, canVoluntarilyNeutralize, getVoluntaryNeutralizationResult } from './terrain';
+import {
+  canUnitEnterTerrain,
+  getEffectiveTerrain,
+  canVoluntarilyNeutralize,
+  getVoluntaryNeutralizationResult,
+  canPlaceBridge,
+  isAdjacentToLandOrBridge,
+  canUnitEnterBridgedHex,
+} from './terrain';
 import { getHexesUnderFire, canDestroyTarget, canCaptureTarget, type TerrainGetter } from './combat';
 
 // ============================================================================
@@ -248,14 +259,27 @@ export function validateMoveAction(
       let hasVoluntaryNeutralization = false;
 
       for (const footprintHex of footprint) {
-        // Check terrain is valid for each hex in footprint
-        const terrain = getTerrainAt(footprintHex);
-        if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
-          // Check if this is a valid voluntary neutralization (only allowed on final step)
-          if (isLastStep && canVoluntarilyNeutralize(unit.type, terrain, state.currentTide)) {
-            hasVoluntaryNeutralization = true;
-          } else {
-            return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+        // Check for bridge on this hex
+        const hasBridge = state.bridges.some(
+          (b) => b.position.q === footprintHex.q && b.position.r === footprintHex.r
+        );
+
+        // If there's a bridge, check if unit can enter bridged hex
+        if (hasBridge) {
+          if (!canUnitEnterBridgedHex(unit.type)) {
+            return { valid: false, error: `Sea units cannot enter bridged hex at step ${i}` };
+          }
+          // Bridge makes hex land - skip normal terrain check for this hex
+        } else {
+          // Check terrain is valid for each hex in footprint
+          const terrain = getTerrainAt(footprintHex);
+          if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
+            // Check if this is a valid voluntary neutralization (only allowed on final step)
+            if (isLastStep && canVoluntarilyNeutralize(unit.type, terrain, state.currentTide)) {
+              hasVoluntaryNeutralization = true;
+            } else {
+              return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+            }
           }
         }
 
@@ -279,7 +303,18 @@ export function validateMoveAction(
       const terrain = getTerrainAt(to);
       const isLastStep = i === path.length - 1;
 
-      if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
+      // Check for bridge on this hex
+      const hasBridge = state.bridges.some(
+        (b) => b.position.q === to.q && b.position.r === to.r
+      );
+
+      // If there's a bridge, check if unit can enter bridged hex
+      if (hasBridge) {
+        if (!canUnitEnterBridgedHex(unit.type)) {
+          return { valid: false, error: `Sea units cannot enter bridged hex at step ${i}` };
+        }
+        // Bridge makes hex land - skip normal terrain check for this hex
+      } else if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
         // Check if this is a valid voluntary neutralization (only allowed on final hex)
         // Per rules Section 3.4: "A unit may voluntarily enter impassable terrain
         // and become stuck/grounded on the first impassable hex."
@@ -996,4 +1031,274 @@ function getAstronefOccupiedHexes(astronef: Unit): HexCoord[] {
     { q: center.q, r: center.r + 1 },     // Southeast
     { q: center.q + 1, r: center.r - 1 }, // Northeast
   ];
+}
+
+// ============================================================================
+// Bridge Actions (Section 9)
+// ============================================================================
+
+/**
+ * Validate placing a bridge on the board.
+ *
+ * Per rules Section 9:
+ * - Bridges are placed on sea hexes (effective terrain must be sea)
+ * - Must connect to land or another bridge
+ * - Cannot be laid under enemy fire
+ * - Cost: 1 AP (standard unload cost)
+ */
+export function validatePlaceBridgeAction(
+  state: GameState,
+  action: PlaceBridgeAction
+): ValidationResult {
+  // Find the bridge unit being placed (should be in cargo of a transporter)
+  const bridge = state.units.find((u) => u.id === action.bridgeId);
+  if (!bridge) {
+    return { valid: false, error: 'Bridge not found' };
+  }
+
+  // Check bridge is actually a bridge
+  if (bridge.type !== UnitType.Bridge) {
+    return { valid: false, error: 'Unit is not a bridge' };
+  }
+
+  // Check bridge is cargo of a unit belonging to current player
+  const transporter = state.units.find(
+    (u) => u.cargo && u.cargo.includes(action.bridgeId) && u.owner === state.currentPlayer
+  );
+  if (!transporter) {
+    return { valid: false, error: 'Bridge must be carried by your unit' };
+  }
+
+  // Check transporter is not stuck or neutralized
+  if (transporter.isStuck) {
+    return { valid: false, error: 'Transporting unit is stuck' };
+  }
+  if (transporter.isNeutralized) {
+    return { valid: false, error: 'Transporting unit is neutralized' };
+  }
+
+  // Check transporter position
+  if (!transporter.position) {
+    return { valid: false, error: 'Transporter has no position' };
+  }
+
+  // Check placement hex is adjacent to transporter
+  const distance = hexDistance(transporter.position, action.position);
+  if (distance !== 1) {
+    return { valid: false, error: 'Bridge must be placed on adjacent hex' };
+  }
+
+  // Check terrain is effective sea at current tide
+  const terrain = state.terrain.find(
+    (t) => t.coord.q === action.position.q && t.coord.r === action.position.r
+  );
+  if (!terrain) {
+    return { valid: false, error: 'Invalid hex position' };
+  }
+
+  if (!canPlaceBridge(terrain.type, state.currentTide)) {
+    return { valid: false, error: 'Bridges can only be placed on sea terrain' };
+  }
+
+  // Check no bridge already exists at this position
+  const existingBridge = state.bridges.find(
+    (b) => b.position.q === action.position.q && b.position.r === action.position.r
+  );
+  if (existingBridge) {
+    return { valid: false, error: 'A bridge already exists at this position' };
+  }
+
+  // Check bridge connects to land or another bridge
+  const neighbors = hexNeighbors(action.position);
+  const neighborData = neighbors.map((n) => {
+    const t = state.terrain.find((t) => t.coord.q === n.q && t.coord.r === n.r);
+    const hasBridge = state.bridges.some((b) => b.position.q === n.q && b.position.r === n.r);
+    return {
+      terrain: t?.type ?? TerrainType.Sea,
+      hasBridge,
+    };
+  });
+
+  if (!isAdjacentToLandOrBridge(neighborData, state.currentTide)) {
+    return { valid: false, error: 'Bridge must connect to land or another bridge' };
+  }
+
+  // Check not under enemy fire
+  const getTerrainAt = createTerrainGetter(state.terrain);
+  const enemyPlayers = state.players
+    .filter((p) => p.id !== state.currentPlayer)
+    .map((p) => p.id);
+
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
+    if (underFire.has(hexKey(action.position))) {
+      return { valid: false, error: 'Cannot place bridge under enemy fire' };
+    }
+  }
+
+  // Check sufficient AP (1 AP for unload)
+  if (state.actionPoints < 1) {
+    return { valid: false, error: 'Insufficient action points (need 1)' };
+  }
+
+  return { valid: true, apCost: 1 };
+}
+
+/**
+ * Validate picking up a bridge from the board.
+ *
+ * Per rules Section 9:
+ * - Bridges can be picked up by any unit with cargo capacity
+ * - Cannot be picked up under enemy fire
+ * - Cost: 1 AP (standard load cost)
+ */
+export function validatePickupBridgeAction(
+  state: GameState,
+  action: PickupBridgeAction
+): ValidationResult {
+  // Find the bridge being picked up
+  const bridgePlacement = state.bridges.find((b) => b.id === action.bridgeId);
+  if (!bridgePlacement) {
+    return { valid: false, error: 'Bridge not found on board' };
+  }
+
+  // Find the transporter
+  const transporter = state.units.find((u) => u.id === action.transporterId);
+  if (!transporter) {
+    return { valid: false, error: 'Transporter not found' };
+  }
+
+  // Check transporter belongs to current player
+  if (transporter.owner !== state.currentPlayer) {
+    return { valid: false, error: 'Cannot use enemy unit to pick up bridge' };
+  }
+
+  // Check transporter is not stuck or neutralized
+  if (transporter.isStuck) {
+    return { valid: false, error: 'Transporting unit is stuck' };
+  }
+  if (transporter.isNeutralized) {
+    return { valid: false, error: 'Transporting unit is neutralized' };
+  }
+
+  // Check transporter position
+  if (!transporter.position) {
+    return { valid: false, error: 'Transporter has no position' };
+  }
+
+  // Check transporter has cargo capacity
+  const transporterProps = UNIT_PROPERTIES[transporter.type];
+  if (transporterProps.cargoSlots === 0) {
+    return { valid: false, error: 'Unit cannot carry cargo' };
+  }
+
+  // Check transporter has space for bridge
+  const currentCargo = transporter.cargo?.length ?? 0;
+  if (currentCargo >= transporterProps.cargoSlots) {
+    return { valid: false, error: 'No cargo space available' };
+  }
+
+  // Check transporter is adjacent to bridge
+  const distance = hexDistance(transporter.position, bridgePlacement.position);
+  if (distance !== 1) {
+    return { valid: false, error: 'Must be adjacent to bridge to pick it up' };
+  }
+
+  // Check not under enemy fire (both bridge and transporter)
+  const getTerrainAt = createTerrainGetter(state.terrain);
+  const enemyPlayers = state.players
+    .filter((p) => p.id !== state.currentPlayer)
+    .map((p) => p.id);
+
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
+    if (underFire.has(hexKey(bridgePlacement.position))) {
+      return { valid: false, error: 'Cannot pick up bridge under enemy fire' };
+    }
+    if (underFire.has(hexKey(transporter.position))) {
+      return { valid: false, error: 'Cannot pick up bridge while under enemy fire' };
+    }
+  }
+
+  // Check sufficient AP (1 AP for load)
+  if (state.actionPoints < 1) {
+    return { valid: false, error: 'Insufficient action points (need 1)' };
+  }
+
+  return { valid: true, apCost: 1 };
+}
+
+/**
+ * Check if a hex has a bridge.
+ */
+export function hasBridgeAt(state: GameState, position: HexCoord): boolean {
+  return state.bridges.some(
+    (b) => b.position.q === position.q && b.position.r === position.r
+  );
+}
+
+/**
+ * Check if a bridge is still valid (connected to land or another valid bridge).
+ * Used for bridge destruction cascade when tide rises.
+ *
+ * Per rules Section 9.3:
+ * - Bridge is destroyed if connecting bridge hex is destroyed
+ * - Bridge is destroyed if connecting land hex is submerged by tide
+ */
+export function validateBridgeConnections(
+  state: GameState
+): { bridgeId: string; valid: boolean }[] {
+  const results: { bridgeId: string; valid: boolean }[] = [];
+  const validBridges = new Set<string>();
+
+  // First pass: find bridges directly connected to permanent or current-tide land
+  for (const bridge of state.bridges) {
+    const neighbors = hexNeighbors(bridge.position);
+    const hasLandConnection = neighbors.some((n) => {
+      const terrain = state.terrain.find(
+        (t) => t.coord.q === n.q && t.coord.r === n.r
+      );
+      if (!terrain) return false;
+
+      // Check if neighbor is land at current tide (not through another bridge)
+      const effectiveTerrain = getEffectiveTerrain(terrain.type, state.currentTide);
+      return effectiveTerrain === 'land';
+    });
+
+    if (hasLandConnection) {
+      validBridges.add(bridge.id);
+    }
+  }
+
+  // Second pass: propagate validity through connected bridges
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const bridge of state.bridges) {
+      if (validBridges.has(bridge.id)) continue;
+
+      const neighbors = hexNeighbors(bridge.position);
+      const hasValidBridgeConnection = neighbors.some((n) => {
+        const connectedBridge = state.bridges.find(
+          (b) => b.position.q === n.q && b.position.r === n.r
+        );
+        return connectedBridge && validBridges.has(connectedBridge.id);
+      });
+
+      if (hasValidBridgeConnection) {
+        validBridges.add(bridge.id);
+        changed = true;
+      }
+    }
+  }
+
+  // Generate results
+  for (const bridge of state.bridges) {
+    results.push({
+      bridgeId: bridge.id,
+      valid: validBridges.has(bridge.id),
+    });
+  }
+
+  return results;
 }
