@@ -8,7 +8,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:10000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -27,7 +27,7 @@ export default defineConfig({
     },
     {
       command: 'yarn dev:client',
-      url: 'http://localhost:5173',
+      url: 'http://localhost:10000',
       reuseExistingServer: true,
       timeout: 30000,
     },

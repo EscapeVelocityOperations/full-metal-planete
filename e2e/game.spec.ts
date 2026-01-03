@@ -157,8 +157,8 @@ test.describe('Full Metal Planète - Game Flow', () => {
 
       try {
         // Both players join
-        await page1.goto(`http://localhost:5173/?gameId=${game1.gameId}&playerId=${game1.playerId}&token=${game1.playerToken}`);
-        await page2.goto(`http://localhost:5173/?gameId=${game2.gameId}&playerId=${game2.playerId}&token=${game2.playerToken}`);
+        await page1.goto(`http://localhost:10000/?gameId=${game1.gameId}&playerId=${game1.playerId}&token=${game1.playerToken}`);
+        await page2.goto(`http://localhost:10000/?gameId=${game2.gameId}&playerId=${game2.playerId}&token=${game2.playerToken}`);
 
         // Wait for both to load (CSS renderer hides canvas)
         await page1.waitForSelector('.css-hex-renderer', { timeout: 10000 });
