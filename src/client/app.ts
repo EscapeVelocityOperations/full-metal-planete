@@ -14,7 +14,7 @@ import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainG
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
 import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, type TerrainGetter } from '@/shared/game/combat';
-import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners } from '@/shared/game/state';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, getMineralStats } from '@/shared/game/state';
 import type { LiftOffDecisionAck, LiftOffDecisionsRevealed } from './game-client';
 
 export interface GameConfig {
@@ -485,6 +485,7 @@ export class GameApp {
         this.initializePlayerColors();
         this.initializeDeploymentInventory();
         this.hud.showScoreboard();
+        this.hud.showMineralStats();
       }
 
       this.updateGameState(data.gameState);
@@ -523,6 +524,7 @@ export class GameApp {
         player.isConnected = true;
       }
       this.updateScoreboard();
+      this.updateMineralStatsDisplay();
     }
 
     this.hud.showMessage(`${data.player.name} reconnected!`, 2000);
@@ -540,6 +542,7 @@ export class GameApp {
         const lobbyPlayer = this.lobbyPlayers.find(p => p.id === playerId);
         this.hud.showMessage(`${lobbyPlayer?.name || 'A player'} disconnected`, 3000);
         this.updateScoreboard();
+        this.updateMineralStatsDisplay();
       }
     }
   }
@@ -576,6 +579,7 @@ export class GameApp {
 
     this.updateGameState(gameState);
     this.hud.showScoreboard();
+    this.hud.showMineralStats();
     this.hud.showMessage('Game started!', 3000);
   }
 
@@ -678,6 +682,7 @@ export class GameApp {
     this.checkMyTurn();
     this.updateLiftOffUI();
     this.updateScoreboard();
+    this.updateMineralStatsDisplay();
     this.render();
   }
 
@@ -1906,6 +1911,33 @@ export class GameApp {
     });
 
     this.hud.updateScoreboard(playerStats, currentPlayerId);
+  }
+
+  /**
+   * Update the mineral statistics display
+   */
+  private updateMineralStatsDisplay(): void {
+    if (!this.gameState) return;
+
+    const stats = getMineralStats(this.gameState);
+
+    // Build player colors and names maps
+    const playerColors: Record<string, string> = {};
+    const playerNames: Record<string, string> = {};
+    for (const player of this.gameState.players) {
+      playerColors[player.id] = player.color;
+      const lobbyPlayer = this.lobbyPlayers.find(p => p.id === player.id);
+      playerNames[player.id] = lobbyPlayer?.name || player.name;
+    }
+
+    this.hud.updateMineralStats({
+      onBoard: stats.onBoard,
+      underwater: stats.underwater,
+      total: stats.total,
+      byPlayer: stats.byPlayer,
+      playerColors,
+      playerNames,
+    });
   }
 
   private checkGameOver(): void {

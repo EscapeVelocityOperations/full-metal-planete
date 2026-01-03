@@ -1678,6 +1678,124 @@ export function getWinners(state: GameState): string[] {
 }
 
 // ============================================================================
+// Mineral Statistics
+// ============================================================================
+
+/**
+ * Mineral statistics for display purposes
+ */
+export interface MineralStats {
+  /** Total minerals remaining on the board (not in any cargo) */
+  onBoard: number;
+  /** Minerals currently underwater (cannot be collected) */
+  underwater: number;
+  /** Minerals per player - in all their units' cargo */
+  byPlayer: Record<string, number>;
+  /** Minerals specifically in each player's astronef (for scoring) */
+  inAstronef: Record<string, number>;
+  /** Total minerals in the game (including those in cargo) */
+  total: number;
+}
+
+/**
+ * Calculate comprehensive mineral statistics for display.
+ *
+ * This function counts:
+ * - Minerals on the board (not loaded)
+ * - Minerals underwater (on flooded terrain)
+ * - Minerals collected by each player (in unit cargo)
+ * - Minerals specifically in astronefs (for scoring)
+ */
+export function getMineralStats(state: GameState): MineralStats {
+  const stats: MineralStats = {
+    onBoard: 0,
+    underwater: 0,
+    byPlayer: {},
+    inAstronef: {},
+    total: state.minerals.length,
+  };
+
+  // Initialize player stats
+  for (const player of state.players) {
+    stats.byPlayer[player.id] = 0;
+    stats.inAstronef[player.id] = 0;
+  }
+
+  // Count minerals on board vs underwater
+  for (const mineral of state.minerals) {
+    // Check if mineral is loaded in any cargo
+    const isInCargo = mineral.position.q === -999 || mineral.position.r === -999;
+
+    if (!isInCargo) {
+      stats.onBoard++;
+
+      // Check if underwater based on terrain and tide
+      const terrain = state.terrain.find(
+        (t) => t.coord.q === mineral.position.q && t.coord.r === mineral.position.r
+      );
+      if (terrain) {
+        const effectiveTerrain = getEffectiveTerrain(terrain.type, state.currentTide);
+        if (effectiveTerrain === 'sea') {
+          stats.underwater++;
+        }
+      }
+    }
+  }
+
+  // Count minerals in unit cargo by player
+  for (const unit of state.units) {
+    if (!unit.cargo || unit.cargo.length === 0) continue;
+
+    const mineralCount = unit.cargo.filter((id) => id.startsWith('mineral')).length;
+    if (mineralCount > 0 && stats.byPlayer[unit.owner] !== undefined) {
+      stats.byPlayer[unit.owner] += mineralCount;
+
+      // Count specifically for astronefs
+      if (unit.type === UnitType.Astronef) {
+        stats.inAstronef[unit.owner] += mineralCount;
+      }
+    }
+  }
+
+  return stats;
+}
+
+/**
+ * Get the number of minerals a player has collected (in any unit's cargo).
+ */
+export function getPlayerMineralCount(state: GameState, playerId: string): number {
+  let count = 0;
+  for (const unit of state.units) {
+    if (unit.owner !== playerId || !unit.cargo) continue;
+    count += unit.cargo.filter((id) => id.startsWith('mineral')).length;
+  }
+  return count;
+}
+
+/**
+ * Get mineral positions that are currently collectible (on land at current tide).
+ */
+export function getCollectibleMineralPositions(state: GameState): HexCoord[] {
+  return state.minerals
+    .filter((mineral) => {
+      // Skip minerals in cargo
+      if (mineral.position.q === -999 || mineral.position.r === -999) {
+        return false;
+      }
+
+      // Check terrain
+      const terrain = state.terrain.find(
+        (t) => t.coord.q === mineral.position.q && t.coord.r === mineral.position.r
+      );
+      if (!terrain) return false;
+
+      const effectiveTerrain = getEffectiveTerrain(terrain.type, state.currentTide);
+      return effectiveTerrain === 'land';
+    })
+    .map((m) => m.position);
+}
+
+// ============================================================================
 // Lift-Off System
 // ============================================================================
 

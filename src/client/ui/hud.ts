@@ -87,6 +87,10 @@ export class HUD {
   private scoreboardTbody: HTMLElement;
   private scoreboardExpanded: boolean = true;
 
+  // Mineral Stats
+  private mineralStatsPanel: HTMLElement | null = null;
+  private mineralStatsExpanded: boolean = true;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -1007,6 +1011,168 @@ export class HUD {
   }
 
   // ============================================================================
+  // Mineral Statistics Panel
+  // ============================================================================
+
+  /**
+   * Create the mineral stats panel if it doesn't exist
+   */
+  private createMineralStatsPanel(): void {
+    if (this.mineralStatsPanel) return;
+
+    this.mineralStatsPanel = document.createElement('div');
+    this.mineralStatsPanel.id = 'mineral-stats-panel';
+    this.mineralStatsPanel.className = 'mineral-stats-panel';
+    this.mineralStatsPanel.innerHTML = `
+      <div class="mineral-stats-header">
+        <span class="mineral-stats-title">⛏️ MINERALS</span>
+        <button id="mineral-stats-toggle" class="mineral-stats-toggle">▼</button>
+      </div>
+      <div class="mineral-stats-content" id="mineral-stats-content">
+        <div class="mineral-summary">
+          <div class="mineral-stat">
+            <span class="mineral-stat-label">On Board</span>
+            <span class="mineral-stat-value" id="minerals-on-board">--</span>
+          </div>
+          <div class="mineral-stat">
+            <span class="mineral-stat-label">Underwater</span>
+            <span class="mineral-stat-value underwater" id="minerals-underwater">--</span>
+          </div>
+          <div class="mineral-stat">
+            <span class="mineral-stat-label">Collected</span>
+            <span class="mineral-stat-value collected" id="minerals-collected">--</span>
+          </div>
+        </div>
+        <div class="mineral-distribution">
+          <div class="mineral-dist-label">Distribution by Player</div>
+          <div class="mineral-bars" id="mineral-bars">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Insert after scoreboard panel
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+      gameContainer.appendChild(this.mineralStatsPanel);
+    }
+
+    // Setup toggle
+    const toggleBtn = document.getElementById('mineral-stats-toggle');
+    toggleBtn?.addEventListener('click', () => {
+      this.toggleMineralStats();
+    });
+  }
+
+  /**
+   * Toggle mineral stats panel expand/collapse
+   */
+  private toggleMineralStats(): void {
+    this.mineralStatsExpanded = !this.mineralStatsExpanded;
+    const content = document.getElementById('mineral-stats-content');
+    const toggleBtn = document.getElementById('mineral-stats-toggle');
+
+    if (content) {
+      content.classList.toggle('collapsed', !this.mineralStatsExpanded);
+    }
+    if (toggleBtn) {
+      toggleBtn.textContent = this.mineralStatsExpanded ? '▼' : '▲';
+    }
+  }
+
+  /**
+   * Update the mineral statistics display
+   */
+  updateMineralStats(stats: {
+    onBoard: number;
+    underwater: number;
+    total: number;
+    byPlayer: Record<string, number>;
+    playerColors: Record<string, string>;
+    playerNames: Record<string, string>;
+  }): void {
+    if (!this.mineralStatsPanel) {
+      this.createMineralStatsPanel();
+    }
+
+    // Update summary stats
+    const onBoardEl = document.getElementById('minerals-on-board');
+    const underwaterEl = document.getElementById('minerals-underwater');
+    const collectedEl = document.getElementById('minerals-collected');
+
+    const totalCollected = stats.total - stats.onBoard;
+
+    if (onBoardEl) {
+      onBoardEl.textContent = `${stats.onBoard}`;
+      // Add collectible count (on board but not underwater)
+      const collectible = stats.onBoard - stats.underwater;
+      if (stats.underwater > 0) {
+        onBoardEl.textContent = `${stats.onBoard} (${collectible} collectible)`;
+      }
+    }
+
+    if (underwaterEl) {
+      underwaterEl.textContent = `${stats.underwater}`;
+      if (stats.underwater === 0) {
+        underwaterEl.classList.remove('warning');
+      } else {
+        underwaterEl.classList.add('warning');
+      }
+    }
+
+    if (collectedEl) {
+      collectedEl.textContent = `${totalCollected} / ${stats.total}`;
+    }
+
+    // Update player distribution bars
+    const barsContainer = document.getElementById('mineral-bars');
+    if (barsContainer) {
+      barsContainer.innerHTML = '';
+
+      // Sort players by mineral count (descending)
+      const sortedPlayers = Object.entries(stats.byPlayer)
+        .sort(([, a], [, b]) => b - a);
+
+      for (const [playerId, count] of sortedPlayers) {
+        const color = stats.playerColors[playerId] || 'gray';
+        const name = stats.playerNames[playerId] || playerId;
+        const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0;
+
+        const barRow = document.createElement('div');
+        barRow.className = 'mineral-bar-row';
+        barRow.innerHTML = `
+          <span class="mineral-bar-player" style="color: ${this.getPlayerColorHex(color)}">${name}</span>
+          <div class="mineral-bar-track">
+            <div class="mineral-bar-fill" style="width: ${percentage}%; background: ${this.getPlayerColorHex(color)}"></div>
+          </div>
+          <span class="mineral-bar-count">${count}</span>
+        `;
+        barsContainer.appendChild(barRow);
+      }
+    }
+  }
+
+  /**
+   * Show the mineral stats panel
+   */
+  showMineralStats(): void {
+    if (!this.mineralStatsPanel) {
+      this.createMineralStatsPanel();
+    }
+    this.mineralStatsPanel!.classList.remove('hidden');
+  }
+
+  /**
+   * Hide the mineral stats panel
+   */
+  hideMineralStats(): void {
+    if (this.mineralStatsPanel) {
+      this.mineralStatsPanel.classList.add('hidden');
+    }
+  }
+
+  // ============================================================================
   // AP Save Dialog
   // ============================================================================
 
@@ -1327,6 +1493,10 @@ export class HUD {
     if (this.actionHistoryPanel) {
       this.actionHistoryPanel.remove();
       this.actionHistoryPanel = null;
+    }
+    if (this.mineralStatsPanel) {
+      this.mineralStatsPanel.remove();
+      this.mineralStatsPanel = null;
     }
   }
 }
