@@ -143,6 +143,50 @@ export function isUnitGrounded(
 export type TerrainMovementEffect = 'normal' | 'stuck' | 'grounded' | 'blocked';
 
 /**
+ * Check if a unit can voluntarily neutralize (enter impassable terrain and become stuck/grounded).
+ *
+ * Per rules Section 3.4:
+ * "A unit may voluntarily enter impassable terrain and become stuck/grounded on the first impassable hex."
+ *
+ * This is a strategic option that allows units to sacrifice mobility for positioning.
+ *
+ * Returns true when:
+ * - Land unit enters variable terrain (marsh/reef) that is currently sea → becomes stuck
+ * - Sea unit enters variable terrain (marsh/reef) that is currently land → becomes grounded
+ *
+ * Returns false when:
+ * - Terrain is permanently impassable (land unit on permanent sea, sea unit on permanent land/mountain)
+ * - SuperTank trying to enter mountain
+ * - Fixed/inert units
+ */
+export function canVoluntarilyNeutralize(
+  unitType: UnitType,
+  terrain: TerrainType,
+  tide: TideLevel
+): boolean {
+  const effect = getTerrainMovementEffect(unitType, terrain, tide);
+  // Can only voluntarily neutralize when result would be stuck or grounded
+  // (not blocked, which means terrain is permanently impassable)
+  return effect === 'stuck' || effect === 'grounded';
+}
+
+/**
+ * Get the neutralization result for a voluntary neutralization move.
+ * Returns 'stuck' for land units, 'grounded' for sea units, or null if not applicable.
+ */
+export function getVoluntaryNeutralizationResult(
+  unitType: UnitType,
+  terrain: TerrainType,
+  tide: TideLevel
+): 'stuck' | 'grounded' | null {
+  const effect = getTerrainMovementEffect(unitType, terrain, tide);
+  if (effect === 'stuck' || effect === 'grounded') {
+    return effect;
+  }
+  return null;
+}
+
+/**
  * Get the movement effect for a unit on a specific terrain at current tide.
  *
  * Returns:

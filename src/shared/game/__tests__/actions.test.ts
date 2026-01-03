@@ -345,6 +345,123 @@ describe('Action System', () => {
       expect(result.error).toContain('enter');
     });
 
+    it('should allow voluntary neutralization on final hex (land unit on flooded reef)', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 }, // Reef at normal tide = sea = becomes stuck
+      ];
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Reef },
+      ];
+
+      const state = createGameState({
+        units: [tank],
+        terrain,
+        actionPoints: 10,
+        currentTide: TideLevel.Normal, // Reef becomes sea at normal tide
+      });
+
+      const result = validateMoveAction(state, 'tank-1', path);
+      expect(result.valid).toBe(true);
+      expect(result.apCost).toBe(1);
+      expect(result.voluntaryNeutralization).toBe('stuck');
+    });
+
+    it('should allow voluntary neutralization on final hex (sea unit on exposed marsh)', () => {
+      const motorboat = createUnit('mb-1', UnitType.MotorBoat, 'p1', { q: 0, r: 0 });
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 }, // Marsh at normal tide = land = becomes grounded
+      ];
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Marsh },
+      ];
+
+      const state = createGameState({
+        units: [motorboat],
+        terrain,
+        actionPoints: 10,
+        currentTide: TideLevel.Normal, // Marsh is land at normal tide
+      });
+
+      const result = validateMoveAction(state, 'mb-1', path);
+      expect(result.valid).toBe(true);
+      expect(result.apCost).toBe(1);
+      expect(result.voluntaryNeutralization).toBe('grounded');
+    });
+
+    it('should reject voluntary neutralization on non-final hex', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 }, // Reef at normal tide = sea (impassable mid-path)
+        { q: 2, r: 0 }, // Land
+      ];
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Reef },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Land },
+      ];
+
+      const state = createGameState({
+        units: [tank],
+        terrain,
+        actionPoints: 10,
+        currentTide: TideLevel.Normal,
+      });
+
+      const result = validateMoveAction(state, 'tank-1', path);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('enter');
+    });
+
+    it('should not mark voluntary neutralization for normal passable moves', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+      ];
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Land },
+      ];
+
+      const state = createGameState({
+        units: [tank],
+        terrain,
+        actionPoints: 10,
+      });
+
+      const result = validateMoveAction(state, 'tank-1', path);
+      expect(result.valid).toBe(true);
+      expect(result.voluntaryNeutralization).toBeUndefined();
+    });
+
+    it('should reject voluntary neutralization onto permanent sea (blocked terrain)', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 }, // Permanent sea
+      ];
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [tank],
+        terrain,
+        actionPoints: 10,
+      });
+
+      const result = validateMoveAction(state, 'tank-1', path);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('enter');
+    });
+
     it('should reject move into hex under enemy fire', () => {
       const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
       const enemyTank1 = createUnit('enemy-1', UnitType.Tank, 'p2', { q: 2, r: -1 });
