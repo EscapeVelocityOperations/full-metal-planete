@@ -17,6 +17,9 @@ import { canUnitEnterTerrain } from '@/shared/game/terrain';
 import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, getHexCoverageInfo, type TerrainGetter, type HexCoverageInfo } from '@/shared/game/combat';
 import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, getMineralStats } from '@/shared/game/state';
 import type { LiftOffDecisionAck, LiftOffDecisionsRevealed } from './game-client';
+import type { ReplayAction, ReplayData } from '@/shared/game/replay';
+import { createReplayData, describeAction } from '@/shared/game/replay';
+import { ReplayManager, ReplayControls } from './replay/index';
 
 export interface GameConfig {
   gameId: string;
@@ -60,6 +63,14 @@ export class GameApp {
   private turnActionHistory: ActionHistoryEntry[] = [];
   private turnStateSnapshots: GameState[] = [];
   private actionSequence: number = 0;
+
+  // Replay system state
+  private gameActionLog: ReplayAction[] = [];
+  private globalActionSequence: number = 0;
+  private initialGameState: GameState | null = null;
+  private replayManager: ReplayManager | null = null;
+  private replayControls: ReplayControls | null = null;
+  private isReplayMode: boolean = false;
 
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
@@ -575,6 +586,11 @@ export class GameApp {
     this.gameState = gameState;
     this.hud.enterGameMode();
 
+    // Capture initial state for replay
+    this.initialGameState = JSON.parse(JSON.stringify(gameState));
+    this.gameActionLog = [];
+    this.globalActionSequence = 0;
+
     // Set up player colors mapping for the renderer
     this.initializePlayerColors();
 
@@ -584,6 +600,9 @@ export class GameApp {
     // Initialize action history panel
     this.hud.showActionHistory();
     this.clearTurnActionHistory();
+
+    // Set up replay callback
+    this.hud.onWatchReplay(() => this.enterReplayMode());
 
     this.updateGameState(gameState);
     this.hud.showScoreboard();
@@ -691,11 +710,8 @@ export class GameApp {
     this.checkMyTurn();
     this.updateLiftOffUI();
     this.updateScoreboard();
-<<<<<<< HEAD
     this.updateMineralStatsDisplay();
-=======
     this.updateUnderFireZones();
->>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
     this.render();
   }
 
@@ -1215,7 +1231,6 @@ export class GameApp {
 
     // Record action for undo BEFORE applying optimistic update
     const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
-    this.recordAction('LOAD', `${unitTypeName} loaded mineral`, 1);
 
     // Send load action to server
     const action: LoadAction = {
@@ -1227,6 +1242,7 @@ export class GameApp {
       timestamp: Date.now(),
     };
 
+    this.recordAction('LOAD', `${unitTypeName} loaded mineral`, 1, action);
     this.client.sendAction(action);
 
     // Optimistic update
@@ -1262,7 +1278,6 @@ export class GameApp {
 
     // Record action for undo BEFORE applying optimistic update
     const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
-    this.recordAction('UNLOAD', `${unitTypeName} dropped cargo at (${destination.q},${destination.r})`, 1);
 
     // Send unload action to server
     const action: UnloadAction = {
@@ -1275,6 +1290,7 @@ export class GameApp {
       timestamp: Date.now(),
     };
 
+    this.recordAction('UNLOAD', `${unitTypeName} dropped cargo at (${destination.q},${destination.r})`, 1, action);
     this.client.sendAction(action);
 
     // Optimistic update - check if cargo is a mineral
@@ -1450,7 +1466,7 @@ export class GameApp {
     // Record action for undo BEFORE applying optimistic update
     const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
     const dest = this.movementPreviewDestination;
-    this.recordAction('MOVE', `Moved ${unitTypeName} to (${dest.q},${dest.r})`, apCost);
+    this.recordAction('MOVE', `Moved ${unitTypeName} to (${dest.q},${dest.r})`, apCost, action);
 
     this.client.sendAction(action);
 
@@ -1559,7 +1575,7 @@ export class GameApp {
    * Record an action in the turn history and take a state snapshot for undo
    * Must be called BEFORE applying the action to game state
    */
-  private recordAction(type: string, description: string, apCost: number): void {
+  private recordAction(type: string, description: string, apCost: number, actionData?: any): void {
     if (!this.gameState) return;
 
     // Take a deep copy of current state for undo
@@ -1587,6 +1603,11 @@ export class GameApp {
     // Update HUD
     this.hud.addActionToHistory(entry);
     this.hud.setUndoEnabled(true);
+
+    // Log for replay if action data provided
+    if (actionData) {
+      this.logActionForReplay({ ...actionData, playerId }, description, apCost);
+    }
   }
 
   /**
@@ -1647,6 +1668,26 @@ export class GameApp {
   }
 
   /**
+   * Log action to the global game action log for replay
+   */
+  private logActionForReplay(action: any, description: string, apCost: number): void {
+    if (!this.gameState) return;
+
+    const replayAction: ReplayAction = {
+      seq: ++this.globalActionSequence,
+      type: action.type,
+      playerId: action.playerId || this.client['playerId'],
+      turn: this.gameState.turn,
+      timestamp: Date.now(),
+      data: JSON.parse(JSON.stringify(action)),
+      apCost,
+      description,
+    };
+
+    this.gameActionLog.push(replayAction);
+  }
+
+  /**
    * Record opponent action for display (no state snapshot needed)
    */
   private recordOpponentAction(action: any): void {
@@ -1698,6 +1739,9 @@ export class GameApp {
 
     this.turnActionHistory.push(entry);
     this.hud.addActionToHistory(entry);
+
+    // Also log for replay
+    this.logActionForReplay(action, description, apCost);
   }
 
   /**
@@ -1972,7 +2016,6 @@ export class GameApp {
   }
 
   /**
-<<<<<<< HEAD
    * Update the mineral statistics display
    */
   private updateMineralStatsDisplay(): void {
@@ -1997,7 +2040,9 @@ export class GameApp {
       playerColors,
       playerNames,
     });
-=======
+  }
+
+  /**
    * Check if a hex is under enemy fire and get coverage info
    */
   private getEnemyCoverageAtHex(coord: HexCoord): HexCoverageInfo | null {
@@ -2092,7 +2137,6 @@ export class GameApp {
 
     // Apply the visualization
     this.renderer.setUnderFireZones(aggregatedCoverage);
->>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
   }
 
   private checkGameOver(): void {
@@ -2164,6 +2208,179 @@ export class GameApp {
     requestAnimationFrame(renderFrame);
   }
 
+  // ============================================================================
+  // Replay Mode
+  // ============================================================================
+
+  /**
+   * Create replay data from the current game
+   */
+  private createGameReplayData(): ReplayData | null {
+    if (!this.initialGameState || !this.gameState) return null;
+
+    const finalScores = calculateAllScores(this.gameState);
+    const winners = getWinners(this.gameState);
+
+    const players = this.lobbyPlayers.map(p => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+    }));
+
+    return createReplayData(
+      this.config.gameId,
+      this.initialGameState,
+      this.gameActionLog,
+      finalScores,
+      winners,
+      players
+    );
+  }
+
+  /**
+   * Enter replay mode
+   */
+  private enterReplayMode(): void {
+    if (this.isReplayMode) return;
+
+    const replayData = this.createGameReplayData();
+    if (!replayData) {
+      this.hud.showMessage('No replay data available', 2000);
+      return;
+    }
+
+    this.isReplayMode = true;
+
+    // Create replay manager
+    this.replayManager = new ReplayManager(replayData);
+
+    // Create replay controls
+    this.replayControls = new ReplayControls();
+    this.replayControls.setReplayData(replayData);
+    this.replayControls.show();
+
+    // Wire up controls
+    this.replayControls.on('play', () => this.replayManager?.play());
+    this.replayControls.on('pause', () => this.replayManager?.pause());
+    this.replayControls.on('stepForward', () => this.replayManager?.stepForward());
+    this.replayControls.on('stepBackward', () => this.replayManager?.stepBackward());
+    this.replayControls.on('previousTurn', () => this.replayManager?.previousTurn());
+    this.replayControls.on('nextTurn', () => this.replayManager?.nextTurn());
+    this.replayControls.on('seekToPercent', (percent) => this.replayManager?.seekToPercent(percent));
+    this.replayControls.on('setSpeed', (speed) => this.replayManager?.setSpeed(speed));
+    this.replayControls.on('export', () => this.replayControls?.exportReplay());
+    this.replayControls.on('close', () => this.exitReplayMode());
+
+    // Listen for replay manager events
+    this.replayManager.on('playbackStateChange', (state) => {
+      this.replayControls?.updatePlaybackState(state);
+    });
+
+    this.replayManager.on('stateUpdate', (state) => {
+      this.updateRendererFromReplayState(state);
+    });
+
+    this.replayManager.on('turnChange', (_turn, _playerId, marker) => {
+      this.replayControls?.updateTurnMarker(marker);
+    });
+
+    this.replayManager.on('replayComplete', () => {
+      this.hud.showMessage('Replay complete', 2000);
+    });
+
+    // Show initial state
+    const initialState = this.replayManager.getPlaybackState();
+    this.replayControls.updatePlaybackState(initialState);
+    if (initialState.gameState) {
+      this.updateRendererFromReplayState(initialState.gameState);
+    }
+
+    // Hide game controls during replay
+    this.hud.hideActionHistory();
+
+    // Add replay mode banner
+    this.showReplayBanner();
+
+    this.hud.showMessage('Replay mode - use controls to navigate', 3000);
+  }
+
+  /**
+   * Exit replay mode
+   */
+  private exitReplayMode(): void {
+    if (!this.isReplayMode) return;
+
+    this.isReplayMode = false;
+
+    // Clean up replay components
+    if (this.replayManager) {
+      this.replayManager.destroy();
+      this.replayManager = null;
+    }
+
+    if (this.replayControls) {
+      this.replayControls.destroy();
+      this.replayControls = null;
+    }
+
+    // Restore current game state
+    if (this.gameState) {
+      if (this.renderer?.setUnits) {
+        this.renderer.setUnits(this.gameState.units);
+      }
+      if (this.renderer?.setMinerals) {
+        this.renderer.setMinerals(this.gameState.minerals);
+      }
+    }
+
+    // Restore game controls
+    this.hud.showActionHistory();
+
+    // Remove replay mode banner
+    this.hideReplayBanner();
+
+    this.hud.showMessage('Exited replay mode', 2000);
+  }
+
+  /**
+   * Update renderer from replay state
+   */
+  private updateRendererFromReplayState(state: GameState): void {
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(state.units);
+    }
+    if (this.renderer?.setMinerals) {
+      this.renderer.setMinerals(state.minerals);
+    }
+    // Update HUD elements
+    this.updateGameState(state);
+  }
+
+  /**
+   * Show replay mode banner
+   */
+  private showReplayBanner(): void {
+    let banner = document.getElementById('replay-mode-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'replay-mode-banner';
+      banner.className = 'replay-mode-banner';
+      banner.textContent = '📺 REPLAY MODE - Press ESC to exit';
+      document.body.appendChild(banner);
+    }
+    banner.classList.add('visible');
+  }
+
+  /**
+   * Hide replay mode banner
+   */
+  private hideReplayBanner(): void {
+    const banner = document.getElementById('replay-mode-banner');
+    if (banner) {
+      banner.classList.remove('visible');
+    }
+  }
+
   /**
    * Clean up resources
    */
@@ -2185,6 +2402,14 @@ export class GameApp {
 
     if (this.helpPanel) {
       this.helpPanel.destroy();
+    }
+
+    if (this.replayManager) {
+      this.replayManager.destroy();
+    }
+
+    if (this.replayControls) {
+      this.replayControls.destroy();
     }
   }
 }

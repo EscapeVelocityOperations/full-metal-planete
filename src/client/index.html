@@ -1118,6 +1118,13 @@
         margin-top: 20px;
       }
 
+      .game-over-buttons {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin-top: 20px;
+      }
+
       /* Action History Panel */
       .action-history-panel {
         position: absolute;
@@ -1933,6 +1940,284 @@
         .tutorial-tips {
           grid-template-columns: 1fr;
         }
+      }
+
+      /* Replay Controls */
+      .replay-controls {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.8));
+        border-top: 2px solid #4a90e2;
+        padding: 16px 24px;
+        display: none;
+        flex-direction: column;
+        gap: 12px;
+        z-index: 100;
+      }
+
+      .replay-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .replay-header h2 {
+        color: #4a90e2;
+        font-size: 18px;
+        margin: 0;
+      }
+
+      .replay-info {
+        display: flex;
+        gap: 24px;
+        justify-content: center;
+        padding: 8px 0;
+      }
+
+      .replay-info-item {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .replay-info-item .label {
+        color: #888;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .replay-info-item .value {
+        color: #fff;
+        font-size: 16px;
+        font-weight: bold;
+      }
+
+      .replay-timeline-container {
+        position: relative;
+        padding: 0 10px;
+      }
+
+      .replay-timeline-track {
+        position: absolute;
+        top: 50%;
+        left: 10px;
+        right: 10px;
+        height: 4px;
+        background: #333;
+        border-radius: 2px;
+        transform: translateY(-50%);
+        pointer-events: none;
+      }
+
+      .replay-timeline-progress {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        background: #4a90e2;
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.1s ease-out;
+      }
+
+      .replay-timeline-markers {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 100%;
+      }
+
+      .timeline-marker {
+        position: absolute;
+        width: 2px;
+        height: 100%;
+        background: #fff;
+        opacity: 0.3;
+      }
+
+      .replay-timeline {
+        width: 100%;
+        height: 20px;
+        -webkit-appearance: none;
+        appearance: none;
+        background: transparent;
+        cursor: pointer;
+        position: relative;
+        z-index: 1;
+      }
+
+      .replay-timeline::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 16px;
+        height: 16px;
+        background: #4a90e2;
+        border-radius: 50%;
+        border: 2px solid #fff;
+        cursor: grab;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      .replay-timeline::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        background: #4a90e2;
+        border-radius: 50%;
+        border: 2px solid #fff;
+        cursor: grab;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      .replay-main-controls {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .replay-nav-group {
+        display: flex;
+        gap: 8px;
+      }
+
+      .btn-nav {
+        width: 44px;
+        height: 44px;
+        border: 1px solid #4a90e2;
+        background: rgba(74, 144, 226, 0.2);
+        color: #4a90e2;
+        font-size: 18px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .btn-nav:hover:not(:disabled) {
+        background: rgba(74, 144, 226, 0.4);
+        transform: scale(1.05);
+      }
+
+      .btn-nav:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      .btn-play {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: 2px solid #4a90e2;
+        background: rgba(74, 144, 226, 0.3);
+        color: #fff;
+        font-size: 28px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .btn-play:hover {
+        background: rgba(74, 144, 226, 0.5);
+        transform: scale(1.05);
+        box-shadow: 0 0 20px rgba(74, 144, 226, 0.4);
+      }
+
+      .btn-play.playing {
+        background: #4a90e2;
+      }
+
+      .replay-speed-controls {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .speed-label {
+        color: #888;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .speed-buttons {
+        display: flex;
+        gap: 6px;
+      }
+
+      .btn-speed {
+        padding: 6px 12px;
+        border: 1px solid #444;
+        background: rgba(255, 255, 255, 0.05);
+        color: #888;
+        font-size: 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .btn-speed:hover {
+        border-color: #4a90e2;
+        color: #4a90e2;
+      }
+
+      .btn-speed.active {
+        border-color: #4a90e2;
+        background: rgba(74, 144, 226, 0.3);
+        color: #fff;
+      }
+
+      .replay-actions {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .btn-icon {
+        width: 36px;
+        height: 36px;
+        border: none;
+        background: rgba(255, 255, 255, 0.1);
+        color: #888;
+        font-size: 16px;
+        border-radius: 50%;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .btn-icon:hover {
+        background: rgba(255, 255, 255, 0.2);
+        color: #fff;
+      }
+
+      /* Replay mode indicator banner */
+      .replay-mode-banner {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(90deg, rgba(233, 69, 96, 0.9), rgba(74, 144, 226, 0.9));
+        color: white;
+        text-align: center;
+        padding: 8px;
+        font-size: 14px;
+        font-weight: bold;
+        z-index: 99;
+        display: none;
+      }
+
+      .replay-mode-banner.visible {
+        display: block;
       }
     </style>
   </head>

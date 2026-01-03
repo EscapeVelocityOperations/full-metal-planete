@@ -484,6 +484,7 @@ export class HUD {
   private liftOffActionCallback: (() => void) | null = null;
   private liftOffModal: HTMLElement | null = null;
   private liftOffBtn: HTMLButtonElement | null = null;
+  private watchReplayCallback: (() => void) | null = null;
 
   /**
    * Show the lift-off decision modal (Turn 21)
@@ -904,15 +905,32 @@ export class HUD {
           Scoring: 2 pts/mineral, 1 pt/equipment, 1 pt/intact turret<br>
           (Only counts if Astronef lifted off successfully)
         </p>
-        <button id="game-over-close-btn" class="btn btn-primary">Close</button>
+        <div class="game-over-buttons">
+          <button id="watch-replay-btn" class="btn btn-secondary">📺 Watch Replay</button>
+          <button id="game-over-close-btn" class="btn btn-primary">Close</button>
+        </div>
       </div>
     `;
 
     this.liftOffModal.style.display = 'flex';
 
+    document.getElementById('watch-replay-btn')?.addEventListener('click', () => {
+      this.liftOffModal!.style.display = 'none';
+      if (this.watchReplayCallback) {
+        this.watchReplayCallback();
+      }
+    });
+
     document.getElementById('game-over-close-btn')?.addEventListener('click', () => {
       this.liftOffModal!.style.display = 'none';
     });
+  }
+
+  /**
+   * Set callback for when user wants to watch replay
+   */
+  onWatchReplay(callback: () => void): void {
+    this.watchReplayCallback = callback;
   }
 
   // ============================================================================
