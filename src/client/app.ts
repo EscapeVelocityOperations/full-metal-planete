@@ -580,6 +580,7 @@ export class GameApp {
     this.updateGameState(gameState);
     this.hud.showScoreboard();
     this.hud.showMineralStats();
+    this.hud.showTurnOrder();
     this.hud.showMessage('Game started!', 3000);
   }
 
@@ -1933,6 +1934,33 @@ export class GameApp {
     });
 
     this.hud.updateScoreboard(playerStats, currentPlayerId);
+
+    // Also update turn order display
+    this.updateTurnOrder();
+  }
+
+  /**
+   * Update the turn order display with current player sequence
+   */
+  private updateTurnOrder(): void {
+    if (!this.gameState) return;
+
+    const turnOrder = this.gameState.turnOrder;
+    const currentPlayerId = this.gameState.currentPlayer || '';
+
+    // Build player info with names from lobby
+    const players = this.gameState.players.map(player => {
+      const lobbyPlayer = this.lobbyPlayers.find(p => p.id === player.id);
+      return {
+        id: player.id,
+        name: lobbyPlayer?.name || player.name || player.id,
+        color: player.color,
+        hasLiftedOff: player.hasLiftedOff || false,
+        isConnected: player.isConnected ?? true,
+      };
+    });
+
+    this.hud.updateTurnOrder(turnOrder, currentPlayerId, players);
   }
 
   /**
