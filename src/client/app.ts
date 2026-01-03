@@ -9,6 +9,7 @@ import { GameClient } from './game-client';
 import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext, type ActionHistoryEntry } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
+import { HelpPanel } from './ui/help-panel';
 import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType, type HexTerrain } from '@/shared/game/types';
 import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainGetter, getOccupiedHexes } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
@@ -46,6 +47,9 @@ export class GameApp {
   private deploymentInventory: DeploymentInventory | null = null;
   private selectedDeploymentUnitId: string | null = null;
 
+  // Help panel
+  private helpPanel: HelpPanel | null = null;
+
   // Movement preview state
   private movementPreviewDestination: HexCoord | null = null;
   private movementPreviewPath: HexCoord[] = [];
@@ -78,6 +82,10 @@ export class GameApp {
     this.input = new InputHandler(this.canvas, this.renderer);
     this.setupInputHandlers();
     this.setupZoomControls();
+
+    // Initialize help panel
+    this.helpPanel = new HelpPanel();
+    this.helpPanel.initialize();
 
     // Load placeholder terrain immediately so canvas isn't black
     this.loadPlaceholderTerrain();
@@ -1954,6 +1962,10 @@ export class GameApp {
 
     if (this.deploymentInventory) {
       this.deploymentInventory.destroy();
+    }
+
+    if (this.helpPanel) {
+      this.helpPanel.destroy();
     }
   }
 }
