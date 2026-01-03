@@ -36,6 +36,7 @@ import { hexKey, hexNeighbors, hexEqual } from './hex';
 import { generateMinerals } from './map-generator';
 import { isUnitStuck, isUnitGrounded, getEffectiveTerrain, canAstronefLandOn, canUnitEnterTerrain } from './terrain';
 import { getHexesUnderFire, type TerrainGetter } from './combat';
+import { isLandingZoneValid, getZoneDistance } from './maps';
 
 // ============================================================================
 // Array Utilities
@@ -1185,6 +1186,52 @@ export function validateLandAstronefAction(
       return {
         valid: false,
         error: `Hex (${hex.q}, ${hex.r}) is already occupied by another astronef`,
+      };
+    }
+  }
+
+  // Check landing zone distance from other astronefs
+  // Per rules: Player 1 can choose any zone, subsequent players must land at least 2 zones away
+  const centerHex = action.position[0]; // Astronef center position
+  const targetTerrain = state.terrain.find(
+    (t) => t.coord.q === centerHex.q && t.coord.r === centerHex.r
+  );
+
+  if (targetTerrain?.landingZone) {
+    // Get zones of all existing astronefs
+    const existingZones: number[] = [];
+    for (const unit of state.units) {
+      if (
+        unit.type === UnitType.Astronef &&
+        unit.owner !== action.playerId &&
+        unit.position &&
+        unit.position.q !== 0 // Check if astronef has actually landed (not at origin)
+      ) {
+        // Find the zone for this astronef's position
+        const astronefTerrain = state.terrain.find(
+          (t) => t.coord.q === unit.position!.q && t.coord.r === unit.position!.r
+        );
+        if (astronefTerrain?.landingZone) {
+          existingZones.push(astronefTerrain.landingZone);
+        }
+      }
+    }
+
+    // Validate zone distance
+    if (!isLandingZoneValid(targetTerrain.landingZone, existingZones)) {
+      // Find the closest conflicting zone for a helpful error message
+      let closestZone = 0;
+      let closestDistance = Infinity;
+      for (const existingZone of existingZones) {
+        const dist = getZoneDistance(targetTerrain.landingZone, existingZone);
+        if (dist < closestDistance) {
+          closestDistance = dist;
+          closestZone = existingZone;
+        }
+      }
+      return {
+        valid: false,
+        error: `Must land at least 2 zones away from existing astronefs (zone ${targetTerrain.landingZone} is only ${closestDistance} zone(s) from zone ${closestZone})`,
       };
     }
   }

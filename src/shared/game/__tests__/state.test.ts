@@ -1848,6 +1848,174 @@ describe('Astronef and Tower Creation', () => {
     });
   });
 
+  describe('validateLandAstronefAction - zone validation', () => {
+    /**
+     * Create a landing state with terrain that has landing zones.
+     * Zone 1 is in top area (around q=18, r=2)
+     * Zone 5 is in bottom area (around q=18, r=20)
+     */
+    function createLandingStateWithZones(): GameState {
+      // Create terrain with landing zones (based on angular sectors)
+      // Zone 1 around top, Zone 5 around bottom
+      const terrain: HexTerrain[] = [
+        // Zone 1 - top area (for p1 landing)
+        { coord: { q: 18, r: 2 }, type: TerrainType.Land, landingZone: 1 },
+        { coord: { q: 19, r: 2 }, type: TerrainType.Land, landingZone: 1 },
+        { coord: { q: 18, r: 3 }, type: TerrainType.Land, landingZone: 1 },
+        { coord: { q: 19, r: 1 }, type: TerrainType.Land, landingZone: 1 },
+        // More Zone 1 hexes for testing same-zone rejection
+        { coord: { q: 20, r: 2 }, type: TerrainType.Land, landingZone: 1 },
+        { coord: { q: 21, r: 2 }, type: TerrainType.Land, landingZone: 1 },
+        { coord: { q: 20, r: 3 }, type: TerrainType.Land, landingZone: 1 },
+        { coord: { q: 21, r: 1 }, type: TerrainType.Land, landingZone: 1 },
+        // Zone 2 - adjacent to zone 1
+        { coord: { q: 25, r: 3 }, type: TerrainType.Land, landingZone: 2 },
+        { coord: { q: 26, r: 3 }, type: TerrainType.Land, landingZone: 2 },
+        { coord: { q: 25, r: 4 }, type: TerrainType.Land, landingZone: 2 },
+        { coord: { q: 26, r: 2 }, type: TerrainType.Land, landingZone: 2 },
+        // Zone 3 - 2 away from zone 1
+        { coord: { q: 32, r: 8 }, type: TerrainType.Land, landingZone: 3 },
+        { coord: { q: 33, r: 8 }, type: TerrainType.Land, landingZone: 3 },
+        { coord: { q: 32, r: 9 }, type: TerrainType.Land, landingZone: 3 },
+        { coord: { q: 33, r: 7 }, type: TerrainType.Land, landingZone: 3 },
+        // Zone 5 - opposite side (4 zones away from zone 1)
+        { coord: { q: 18, r: 20 }, type: TerrainType.Land, landingZone: 5 },
+        { coord: { q: 19, r: 20 }, type: TerrainType.Land, landingZone: 5 },
+        { coord: { q: 18, r: 21 }, type: TerrainType.Land, landingZone: 5 },
+        { coord: { q: 19, r: 19 }, type: TerrainType.Land, landingZone: 5 },
+      ];
+
+      return {
+        ...createGameState(),
+        phase: GamePhase.Landing,
+        turn: 1,
+        currentPlayer: 'p2',
+        terrain,
+        units: [
+          // P1 astronef already landed in zone 1
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 18, r: 2 }),
+          // P2 astronef not yet landed
+          createUnit('astronef-p2', UnitType.Astronef, 'p2', { q: 0, r: 0 }),
+        ],
+        players: [
+          { id: 'p1', name: 'Player 1', color: PlayerColor.Red, isConnected: true, isReady: true, astronefPosition: [{ q: 18, r: 2 }], hasLiftedOff: false, capturedAstronefs: [] },
+          { id: 'p2', name: 'Player 2', color: PlayerColor.Blue, isConnected: true, isReady: true, astronefPosition: [], hasLiftedOff: false, capturedAstronefs: [] },
+        ],
+        turnOrder: ['p1', 'p2'],
+      };
+    }
+
+    it('should allow first player to land anywhere', () => {
+      const state = {
+        ...createLandingStateWithZones(),
+        currentPlayer: 'p1',
+        units: [
+          createUnit('astronef-p1', UnitType.Astronef, 'p1', { q: 0, r: 0 }),
+        ],
+        players: [
+          { id: 'p1', name: 'Player 1', color: PlayerColor.Red, isConnected: true, isReady: true, astronefPosition: [], hasLiftedOff: false, capturedAstronefs: [] },
+        ],
+      };
+
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        position: [
+          { q: 18, r: 2 },
+          { q: 19, r: 2 },
+          { q: 18, r: 3 },
+          { q: 19, r: 1 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should reject landing in same zone as existing astronef', () => {
+      const state = createLandingStateWithZones();
+
+      // P2 trying to land in zone 1 (same as P1) but different hexes
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p2',
+        timestamp: Date.now(),
+        position: [
+          { q: 20, r: 2 }, // Zone 1 - same zone but different hexes from P1
+          { q: 21, r: 2 },
+          { q: 20, r: 3 },
+          { q: 21, r: 1 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('zones away');
+    });
+
+    it('should reject landing in adjacent zone (distance 1)', () => {
+      const state = createLandingStateWithZones();
+
+      // P2 trying to land in zone 2 (adjacent to P1's zone 1)
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p2',
+        timestamp: Date.now(),
+        position: [
+          { q: 25, r: 3 }, // Zone 2
+          { q: 26, r: 3 },
+          { q: 25, r: 4 },
+          { q: 26, r: 2 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('2 zones away');
+    });
+
+    it('should allow landing 2 zones away', () => {
+      const state = createLandingStateWithZones();
+
+      // P2 trying to land in zone 3 (2 away from P1's zone 1)
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p2',
+        timestamp: Date.now(),
+        position: [
+          { q: 32, r: 8 }, // Zone 3
+          { q: 33, r: 8 },
+          { q: 32, r: 9 },
+          { q: 33, r: 7 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should allow landing on opposite side of map', () => {
+      const state = createLandingStateWithZones();
+
+      // P2 trying to land in zone 5 (4 away from P1's zone 1)
+      const action: LandAstronefAction = {
+        type: 'LAND_ASTRONEF',
+        playerId: 'p2',
+        timestamp: Date.now(),
+        position: [
+          { q: 18, r: 20 }, // Zone 5
+          { q: 19, r: 20 },
+          { q: 18, r: 21 },
+          { q: 19, r: 19 },
+        ],
+      };
+
+      const result = validateLandAstronefAction(state, action);
+      expect(result.valid).toBe(true);
+    });
+  });
+
   describe('validateDeployUnitAction', () => {
     function createDeploymentState(): GameState {
       const terrain: HexTerrain[] = [
