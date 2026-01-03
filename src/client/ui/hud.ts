@@ -586,6 +586,101 @@ export class HUD {
     this.liftOffActionCallback = callback;
   }
 
+  private liftOffWaitingModal: HTMLElement | null = null;
+
+  /**
+   * Show waiting state after player makes their lift-off decision
+   */
+  showLiftOffWaiting(pendingPlayers: number): void {
+    if (!this.liftOffWaitingModal) {
+      this.liftOffWaitingModal = document.createElement('div');
+      this.liftOffWaitingModal.id = 'lift-off-waiting-modal';
+      this.liftOffWaitingModal.className = 'modal';
+      document.body.appendChild(this.liftOffWaitingModal);
+    }
+
+    const playerText = pendingPlayers === 1 ? '1 player' : `${pendingPlayers} players`;
+
+    this.liftOffWaitingModal.innerHTML = `
+      <div class="modal-content lift-off-waiting">
+        <h2>Decision Recorded</h2>
+        <div class="waiting-spinner"></div>
+        <p>Waiting for <strong>${playerText}</strong> to decide...</p>
+        <p class="waiting-note">All decisions will be revealed simultaneously.</p>
+      </div>
+    `;
+
+    this.liftOffWaitingModal.style.display = 'flex';
+  }
+
+  /**
+   * Hide the lift-off waiting modal
+   */
+  hideLiftOffWaiting(): void {
+    if (this.liftOffWaitingModal) {
+      this.liftOffWaitingModal.style.display = 'none';
+    }
+  }
+
+  /**
+   * Show the lift-off decisions reveal modal
+   */
+  showLiftOffReveal(decisions: Record<string, { decision: boolean; liftedOff: boolean; playerName: string }>): void {
+    // Reuse the main lift-off modal
+    if (!this.liftOffModal) {
+      this.liftOffModal = document.createElement('div');
+      this.liftOffModal.id = 'lift-off-modal';
+      this.liftOffModal.className = 'modal';
+      document.body.appendChild(this.liftOffModal);
+    }
+
+    const playerRows = Object.entries(decisions).map(([, info]) => {
+      const decisionIcon = info.decision ? '🚀' : '🌍';
+      const decisionText = info.decision ? 'Lift Off Now' : 'Stay';
+      const statusText = info.liftedOff ? 'Lifted off!' : 'On planet';
+
+      return `
+        <tr class="${info.liftedOff ? 'lifted-off' : 'staying'}">
+          <td>${info.playerName}</td>
+          <td>${decisionIcon} ${decisionText}</td>
+          <td>${statusText}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const liftedOffCount = Object.values(decisions).filter(d => d.liftedOff).length;
+    const stayingCount = Object.values(decisions).filter(d => !d.liftedOff).length;
+
+    this.liftOffModal.innerHTML = `
+      <div class="modal-content lift-off-reveal">
+        <h2>Lift-Off Decisions Revealed!</h2>
+        <table class="decisions-table">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Decision</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${playerRows}
+          </tbody>
+        </table>
+        <div class="decision-summary">
+          <p>🚀 <strong>${liftedOffCount}</strong> player(s) lifted off</p>
+          <p>🌍 <strong>${stayingCount}</strong> player(s) staying until Turn 25</p>
+        </div>
+        <button id="lift-off-reveal-close-btn" class="btn btn-primary">Continue</button>
+      </div>
+    `;
+
+    this.liftOffModal.style.display = 'flex';
+
+    document.getElementById('lift-off-reveal-close-btn')?.addEventListener('click', () => {
+      this.liftOffModal!.style.display = 'none';
+    });
+  }
+
   // ============================================================================
   // Unit Context Actions (Mineral Pickup/Drop)
   // ============================================================================
@@ -1212,6 +1307,10 @@ export class HUD {
     if (this.liftOffModal) {
       this.liftOffModal.remove();
       this.liftOffModal = null;
+    }
+    if (this.liftOffWaitingModal) {
+      this.liftOffWaitingModal.remove();
+      this.liftOffWaitingModal = null;
     }
     if (this.liftOffBtn) {
       this.liftOffBtn.remove();

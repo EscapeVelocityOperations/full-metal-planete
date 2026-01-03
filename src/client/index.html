@@ -1180,6 +1180,81 @@
         color: #ffaa00;
         font-weight: bold;
       }
+
+      /* Lift-off Waiting Modal */
+      .lift-off-waiting {
+        max-width: 400px;
+      }
+
+      .lift-off-waiting h2 {
+        color: #44aa44;
+      }
+
+      .waiting-spinner {
+        width: 60px;
+        height: 60px;
+        border: 4px solid #333;
+        border-top-color: #4a90e2;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 20px auto;
+      }
+
+      .waiting-note {
+        color: #888;
+        font-size: 13px;
+        font-style: italic;
+        margin-top: 10px;
+      }
+
+      /* Lift-off Reveal Modal */
+      .lift-off-reveal {
+        max-width: 500px;
+      }
+
+      .lift-off-reveal h2 {
+        color: #ffaa00;
+      }
+
+      .decisions-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 20px 0;
+      }
+
+      .decisions-table th,
+      .decisions-table td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .decisions-table th {
+        color: #888;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .decisions-table tr.lifted-off td {
+        color: #44ff44;
+      }
+
+      .decisions-table tr.staying td {
+        color: #4a90e2;
+      }
+
+      .decision-summary {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        padding: 16px;
+        margin: 20px 0;
+        text-align: left;
+      }
+
+      .decision-summary p {
+        margin: 8px 0;
+        color: #ccc;
+      }
     </style>
   </head>
   <body>

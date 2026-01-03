@@ -4,6 +4,7 @@ import type { WSMessage, GameAction, HexCoord } from './types.js';
 import { initializeGame } from './game-starter.js';
 import type { GameStorage, StoredAction } from './storage/types.js';
 import { UnitType, GamePhase } from '../shared/game/types.js';
+import { setLiftOffDecision, allLiftOffDecisionsMade, processLiftOffDecisions } from '../shared/game/state.js';
 
 interface LandAstronefAction extends GameAction {
   type: 'LAND_ASTRONEF';
@@ -186,6 +187,11 @@ export class WebSocketHandler {
             },
             timestamp: Date.now(),
           });
+          break;
+
+        case 'LIFTOFF_DECISION':
+          // Handle secret lift-off decision (Turn 21)
+          this.handleLiftOffDecision(room, playerId, message.payload?.decision);
           break;
 
         default:
@@ -401,6 +407,84 @@ export class WebSocketHandler {
       console.log(`Checkpointed game ${room.id} (turn ${room.gameState.turn}, phase ${room.gameState.phase})`);
     } catch (error) {
       console.error(`Failed to checkpoint game ${room.id}:`, error);
+    }
+  }
+
+  /**
+   * Handle lift-off decision (Turn 21 secret decision)
+   * Decisions are collected secretly and revealed simultaneously when all players have decided.
+   */
+  private handleLiftOffDecision(room: Room, playerId: string, decision: boolean): void {
+    const gameState = room.gameState;
+    if (!gameState) {
+      this.sendError(room.id, playerId, 'NO_GAME_STATE', 'No game state');
+      return;
+    }
+
+    // Verify it's Turn 21 and LiftOffDecision phase
+    if (gameState.turn !== 21) {
+      this.sendError(room.id, playerId, 'WRONG_TURN', 'Lift-off decisions are only made on Turn 21');
+      return;
+    }
+
+    // Check if player already made decision
+    if (gameState.liftOffDecisions[playerId] !== null && gameState.liftOffDecisions[playerId] !== undefined) {
+      this.sendError(room.id, playerId, 'ALREADY_DECIDED', 'You have already made your decision');
+      return;
+    }
+
+    // Record the decision secretly (only update server state, don't broadcast)
+    const updatedState = setLiftOffDecision(gameState, playerId, decision);
+    room.updateGameState(updatedState);
+
+    // Send acknowledgment to the player who made the decision (their decision is recorded)
+    const pendingCount = updatedState.players.filter(
+      p => updatedState.liftOffDecisions[p.id] === null || updatedState.liftOffDecisions[p.id] === undefined
+    ).length;
+
+    this.sendToPlayer(room.id, playerId, {
+      type: 'LIFTOFF_DECISION_ACK',
+      payload: {
+        decision,
+        pendingPlayers: pendingCount,
+      },
+      timestamp: Date.now(),
+    });
+
+    console.log(`Player ${playerId} made lift-off decision: ${decision ? 'lift off now' : 'stay'}. ${pendingCount} players remaining.`);
+
+    // Check if all players have made their decisions
+    if (allLiftOffDecisionsMade(updatedState)) {
+      // All decisions are in - reveal them simultaneously and process lift-offs
+      const finalState = processLiftOffDecisions(updatedState);
+      room.updateGameState(finalState);
+
+      // Build player decisions summary for the reveal
+      const decisions: Record<string, { decision: boolean; liftedOff: boolean; playerName: string }> = {};
+      for (const player of finalState.players) {
+        decisions[player.id] = {
+          decision: updatedState.liftOffDecisions[player.id] ?? false,
+          liftedOff: player.hasLiftedOff,
+          playerName: player.name,
+        };
+      }
+
+      // Broadcast the reveal to all players
+      this.broadcast(room.id, {
+        type: 'LIFTOFF_DECISIONS_REVEALED',
+        payload: {
+          decisions,
+          gameState: finalState,
+        },
+        timestamp: Date.now(),
+      });
+
+      console.log(`All lift-off decisions revealed for game ${room.id}. Players who lifted off: ${
+        Object.entries(decisions)
+          .filter(([, d]) => d.liftedOff)
+          .map(([, d]) => d.playerName)
+          .join(', ') || 'none'
+      }`);
     }
   }
 
