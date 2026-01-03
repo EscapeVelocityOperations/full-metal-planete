@@ -1,6 +1,7 @@
 /**
  * CSS-based hex grid renderer using HTML elements and sprites
  * Alternative to WebGPU/WebGL renderer for broader compatibility
+ * Optimized for mobile performance with adaptive quality settings
  */
 
 import { axialToPixel } from '../hex-geometry';
@@ -18,6 +19,14 @@ import type { Unit, PlayerColor, Mineral, HexCoord } from '@/shared/game/types';
 import { UnitType, PlayerColor as PlayerColorEnum, UNIT_SHAPES } from '@/shared/game/types';
 import { getUnitFootprint } from '@/shared/game/hex';
 import { canCollectMineral } from '@/shared/game/terrain';
+import {
+  detectPerformanceProfile,
+  getOptimizationSettings,
+  throttle,
+  RenderBatcher,
+  type PerformanceProfile,
+  type OptimizationSettings,
+} from './performance';
 
 // Zoom configuration
 const MIN_ZOOM = 0.3;
@@ -100,6 +109,7 @@ const PLAYER_COLORS: Record<string, string> = {
 
 /**
  * CSS-based hex renderer using DOM elements
+ * Features adaptive performance optimization for mobile devices
  */
 export class CSSHexRenderer {
   private container: HTMLDivElement;
@@ -118,10 +128,27 @@ export class CSSHexRenderer {
   private mapBounds: { minX: number; minY: number; maxX: number; maxY: number } = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   private zoomChangeCallbacks: Set<(zoom: number) => void> = new Set();
 
+  // Performance optimization
+  private performanceProfile: PerformanceProfile;
+  private optimizationSettings: OptimizationSettings;
+  private renderBatcher: RenderBatcher = new RenderBatcher();
+
   constructor(parentElement: HTMLElement) {
+    // Detect device performance characteristics
+    this.performanceProfile = detectPerformanceProfile();
+    this.optimizationSettings = getOptimizationSettings(this.performanceProfile);
+
+    console.log(
+      `[CSSHexRenderer] Performance tier: ${this.performanceProfile.tier}`,
+      this.performanceProfile.isMobile ? '(mobile)' : '(desktop)',
+      this.performanceProfile.prefersReducedMotion ? '(reduced-motion)' : ''
+    );
+
     // Create main container with scrollbars
     this.container = document.createElement('div');
     this.container.className = 'css-hex-renderer';
+    // Add performance tier class for CSS targeting
+    this.container.classList.add(`perf-${this.performanceProfile.tier}`);
     this.container.style.cssText = `
       position: absolute;
       top: 0;
@@ -131,6 +158,8 @@ export class CSSHexRenderer {
       overflow: auto;
       background: #0a0a0a;
       z-index: 0;
+      contain: layout style;
+      touch-action: pan-x pan-y;
     `;
 
     // Create grid container (this will be scaled for zoom)
@@ -140,6 +169,7 @@ export class CSSHexRenderer {
       position: relative;
       transform-origin: 0 0;
       will-change: transform;
+      contain: layout style paint;
     `;
 
     // Create minerals container (sits between terrain and units)
@@ -189,34 +219,42 @@ export class CSSHexRenderer {
 
   /**
    * Inject CSS styles for hex elements
+   * Adapts based on performance tier for optimal mobile experience
    */
   private injectStyles(): void {
     const styleId = 'css-hex-renderer-styles';
     if (document.getElementById(styleId)) return;
 
+    const { enableTransitions, enableTerrainPatterns, enableHoverEffects, enableAnimations, enableComplexFilters } =
+      this.optimizationSettings;
+
     const style = document.createElement('style');
     style.id = styleId;
     style.textContent = `
+      /* Base hex cell styles */
       .hex-cell {
         position: absolute;
         width: ${HEX_SIZE * 2}px;
         height: ${HEX_SIZE * Math.sqrt(3)}px;
         clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
-        transition: background-color 0.3s ease;
-        will-change: transform;
+        ${enableTransitions ? 'transition: background-color 0.3s ease;' : ''}
+        contain: layout style paint;
       }
 
       .hex-cell.sprite-mode {
         background-size: 100% 100%;
         background-repeat: no-repeat;
         background-position: center;
-        clip-path: none;  /* SVG sprites already have hex shape */
+        clip-path: none;
       }
 
+      ${enableHoverEffects ? `
       .hex-cell:hover {
         filter: brightness(1.2);
       }
+      ` : ''}
 
+      ${enableTerrainPatterns ? `
       /* Marsh indicator - diagonal stripes pattern */
       .hex-cell.terrain-marsh::after {
         content: '';
@@ -252,6 +290,30 @@ export class CSSHexRenderer {
           radial-gradient(circle at 70% 75%, rgba(150, 100, 50, 0.5) 2px, transparent 2px);
         pointer-events: none;
       }
+      ` : `
+      /* Simplified terrain patterns for low-power devices */
+      .hex-cell.terrain-marsh::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(100, 180, 100, 0.25);
+        pointer-events: none;
+      }
+
+      .hex-cell.terrain-reef::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(150, 100, 50, 0.25);
+        pointer-events: none;
+      }
+      `}
 
       .hex-cell .hex-content {
         position: absolute;
@@ -270,13 +332,18 @@ export class CSSHexRenderer {
         justify-content: center;
         font-size: 24px;
         font-weight: bold;
+        ${enableComplexFilters ? `
         text-shadow:
           1px 1px 2px rgba(0,0,0,0.8),
           -1px -1px 2px rgba(0,0,0,0.8),
           1px -1px 2px rgba(0,0,0,0.8),
           -1px 1px 2px rgba(0,0,0,0.8);
+        ` : `
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        `}
         pointer-events: none;
         z-index: 10;
+        contain: layout style;
       }
 
       .unit-marker.astronef {
@@ -320,7 +387,7 @@ export class CSSHexRenderer {
 
       .hex-cell.highlight-target {
         box-shadow: inset 0 0 0 4px rgba(255, 100, 100, 0.9);
-        animation: pulse-target 0.8s ease-in-out infinite;
+        ${enableAnimations ? 'animation: pulse-target 0.8s ease-in-out infinite;' : ''}
       }
 
       .hex-cell.highlight-target::before {
@@ -400,7 +467,7 @@ export class CSSHexRenderer {
       /* Multiple enemy unit coverage / killzone (red/danger) */
       .hex-cell.highlight-underfire-2 {
         box-shadow: inset 0 0 0 3px rgba(255, 80, 80, 0.9);
-        animation: pulse-danger 1.5s ease-in-out infinite;
+        ${enableAnimations ? 'animation: pulse-danger 1.5s ease-in-out infinite;' : ''}
       }
 
       .hex-cell.highlight-underfire-2::before {
@@ -414,10 +481,12 @@ export class CSSHexRenderer {
         pointer-events: none;
       }
 
+      ${enableAnimations ? `
       @keyframes pulse-danger {
         0%, 100% { box-shadow: inset 0 0 0 3px rgba(255, 80, 80, 0.9); }
         50% { box-shadow: inset 0 0 0 4px rgba(255, 80, 80, 0.6); }
       }
+      ` : ''}
 
       /* Hex coverage tooltip */
       .hex-cell[data-coverage-count]::after {
@@ -445,14 +514,19 @@ export class CSSHexRenderer {
         color: #333;
       }
 
+      ${enableAnimations ? `
       @keyframes pulse-target {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.6; }
       }
+      ` : ''}
 
       /* Unit selection highlight */
       .unit-container.selected .unit-marker {
-        filter: brightness(1.3) drop-shadow(0 0 8px rgba(100, 255, 100, 0.8));
+        ${enableComplexFilters
+          ? 'filter: brightness(1.3) drop-shadow(0 0 8px rgba(100, 255, 100, 0.8));'
+          : 'filter: brightness(1.3);'
+        }
       }
 
       /* Mineral indicators */
@@ -460,21 +534,36 @@ export class CSSHexRenderer {
         position: absolute;
         width: 16px;
         height: 16px;
-        background: radial-gradient(circle at 30% 30%, #ff8c4a, #e55a3c 60%, #b33a1c);
+        ${enableComplexFilters
+          ? `background: radial-gradient(circle at 30% 30%, #ff8c4a, #e55a3c 60%, #b33a1c);
+             box-shadow:
+               0 2px 4px rgba(0, 0, 0, 0.4),
+               inset 0 -2px 4px rgba(0, 0, 0, 0.3),
+               inset 0 2px 4px rgba(255, 200, 150, 0.4);`
+          : `background: #e55a3c;
+             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);`
+        }
         border-radius: 50%;
-        box-shadow:
-          0 2px 4px rgba(0, 0, 0, 0.4),
-          inset 0 -2px 4px rgba(0, 0, 0, 0.3),
-          inset 0 2px 4px rgba(255, 200, 150, 0.4);
         pointer-events: none;
         z-index: 5;
-        transition: opacity 0.3s ease, filter 0.3s ease;
+        ${enableTransitions ? 'transition: opacity 0.3s ease;' : ''}
       }
 
       /* Mineral underwater (on flooded terrain) */
       .mineral-marker.underwater {
         opacity: 0.4;
-        filter: blur(1px) saturate(0.7);
+        ${enableComplexFilters ? 'filter: blur(1px) saturate(0.7);' : ''}
+      }
+
+      /* Reduced motion preference support */
+      @media (prefers-reduced-motion: reduce) {
+        .hex-cell,
+        .mineral-marker {
+          transition: none !important;
+        }
+        .hex-cell.highlight-target {
+          animation: none !important;
+        }
       }
     `;
     document.head.appendChild(style);
@@ -493,11 +582,24 @@ export class CSSHexRenderer {
   /**
    * Set up gesture-based zoom (pinch-to-zoom for trackpad/touch)
    * Two-finger scrolling is handled natively by overflow:auto
+   * Optimized with throttling for mobile performance
    */
   private setupGestureZoom(): void {
     // Track touch points for pinch-to-zoom
     let initialPinchDistance = 0;
     let initialZoom = 1;
+
+    // Throttled zoom update for mobile performance
+    const { touchThrottleMs } = this.optimizationSettings;
+    const applyZoom = throttle((newZoom: number) => {
+      if (newZoom !== this.viewport.zoom) {
+        this.viewport.zoom = newZoom;
+        this.renderBatcher.schedule(() => {
+          this.updateViewport();
+        });
+        this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
+      }
+    }, touchThrottleMs);
 
     // Safari/macOS trackpad gesture events (gesturestart, gesturechange, gestureend)
     this.container.addEventListener('gesturestart', ((event: GestureEvent) => {
@@ -508,12 +610,7 @@ export class CSSHexRenderer {
     this.container.addEventListener('gesturechange', ((event: GestureEvent) => {
       event.preventDefault();
       const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom * event.scale));
-
-      if (newZoom !== this.viewport.zoom) {
-        this.viewport.zoom = newZoom;
-        this.updateViewport();
-        this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
-      }
+      applyZoom(newZoom);
     }) as EventListener);
 
     this.container.addEventListener('gestureend', ((event: GestureEvent) => {
@@ -541,12 +638,7 @@ export class CSSHexRenderer {
         // Calculate zoom scale based on pinch ratio
         const scale = currentDistance / initialPinchDistance;
         const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom * scale));
-
-        if (newZoom !== this.viewport.zoom) {
-          this.viewport.zoom = newZoom;
-          this.updateViewport();
-          this.zoomChangeCallbacks.forEach(cb => cb(newZoom));
-        }
+        applyZoom(newZoom);
       }
     }, { passive: true });
 
@@ -595,11 +687,15 @@ export class CSSHexRenderer {
 
   /**
    * Rebuild the minerals layer
+   * Uses DocumentFragment for batch DOM insertion (better performance)
    */
   private rebuildMinerals(): void {
     // Clear existing mineral elements
     this.mineralsContainer.innerHTML = '';
     this.mineralElements.clear();
+
+    // Use DocumentFragment for batch insertion
+    const fragment = document.createDocumentFragment();
 
     // Create mineral elements for minerals on the map (not loaded in cargo)
     // Minerals in cargo have position { q: -999, r: -999 }
@@ -611,8 +707,10 @@ export class CSSHexRenderer {
 
       const element = this.createMineralElement(mineral);
       this.mineralElements.set(mineral.id, element);
-      this.mineralsContainer.appendChild(element);
+      fragment.appendChild(element);
     }
+
+    this.mineralsContainer.appendChild(fragment);
   }
 
   /**
@@ -672,11 +770,15 @@ export class CSSHexRenderer {
 
   /**
    * Rebuild the unit layer
+   * Uses DocumentFragment for batch DOM insertion (better performance)
    */
   private rebuildUnits(): void {
     // Clear existing unit elements
     this.unitsContainer.innerHTML = '';
     this.unitElements.clear();
+
+    // Use DocumentFragment for batch insertion
+    const fragment = document.createDocumentFragment();
 
     // Create unit elements (only for units with a position on the map)
     for (const unit of this.units) {
@@ -685,8 +787,10 @@ export class CSSHexRenderer {
 
       const element = this.createUnitElement(unit);
       this.unitElements.set(unit.id, element);
-      this.unitsContainer.appendChild(element);
+      fragment.appendChild(element);
     }
+
+    this.unitsContainer.appendChild(fragment);
   }
 
   /**
@@ -931,20 +1035,26 @@ export class CSSHexRenderer {
 
   /**
    * Rebuild the entire hex grid
+   * Uses DocumentFragment for batch DOM insertion (better performance)
    */
   private rebuildGrid(): void {
     // Clear existing hex elements (but preserve unitsContainer)
     this.hexElements.forEach((el) => el.remove());
     this.hexElements.clear();
 
+    // Use DocumentFragment for batch insertion
+    const fragment = document.createDocumentFragment();
+
     // Create hex elements
     for (const hex of this.terrainHexes) {
       const element = this.createHexElement(hex);
       const key = `${hex.coord.q},${hex.coord.r}`;
       this.hexElements.set(key, element);
-      // Insert before unitsContainer so units render on top
-      this.gridContainer.insertBefore(element, this.unitsContainer);
+      fragment.appendChild(element);
     }
+
+    // Insert all hexes at once before units layer
+    this.gridContainer.insertBefore(fragment, this.mineralsContainer);
 
     this.updateViewport();
   }
@@ -1296,10 +1406,49 @@ export class CSSHexRenderer {
    * Clean up resources
    */
   destroy(): void {
+    this.renderBatcher.clear();
     this.container.remove();
     this.hexElements.clear();
     this.unitElements.clear();
     this.mineralElements.clear();
     this.zoomChangeCallbacks.clear();
+  }
+
+  /**
+   * Get the current performance profile
+   * Useful for debugging and displaying performance info
+   */
+  getPerformanceProfile(): PerformanceProfile {
+    return this.performanceProfile;
+  }
+
+  /**
+   * Get the current optimization settings
+   * Useful for debugging and displaying optimization info
+   */
+  getOptimizationSettings(): OptimizationSettings {
+    return this.optimizationSettings;
+  }
+
+  /**
+   * Force a specific performance tier (for testing/debugging)
+   * @param tier - The performance tier to use
+   */
+  setPerformanceTier(tier: 'high' | 'medium' | 'low'): void {
+    this.performanceProfile = { ...this.performanceProfile, tier };
+    this.optimizationSettings = getOptimizationSettings(this.performanceProfile);
+
+    // Re-inject styles with new settings
+    const existingStyle = document.getElementById('css-hex-renderer-styles');
+    if (existingStyle) {
+      existingStyle.remove();
+    }
+    this.injectStyles();
+
+    // Update container class
+    this.container.classList.remove('perf-high', 'perf-medium', 'perf-low');
+    this.container.classList.add(`perf-${tier}`);
+
+    console.log(`[CSSHexRenderer] Performance tier changed to: ${tier}`);
   }
 }
