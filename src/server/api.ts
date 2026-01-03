@@ -6,7 +6,7 @@ import { Room } from './room.js';
 import { WebSocketHandler } from './websocket.js';
 import { initializeStorage, shutdownStorage, getStorage } from './storage/index.js';
 import type { GameStorage } from './storage/types.js';
-import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameStatusResponse, GameRoom } from './types.js';
+import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameStatusResponse, GameRoom, SpectateGameResponse, Spectator } from './types.js';
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
@@ -39,6 +39,14 @@ function restoreRoom(data: GameRoom): Room {
         lastSeen: new Date(player.lastSeen),
       });
     }
+  }
+
+  // Restore spectators
+  for (const spectator of data.spectators || []) {
+    room.addSpectator({
+      ...spectator,
+      joinedAt: new Date(spectator.joinedAt),
+    });
   }
 
   // Restore room state
@@ -98,6 +106,7 @@ export function createServer() {
   fastify.after(() => {
     /**
      * WebSocket connection endpoint - use route() with wsHandler for proper WS handling
+     * Supports both player and spectator connections
      */
     fastify.route({
       method: 'GET',
@@ -112,10 +121,15 @@ export function createServer() {
         }
 
         // Decode token (simple base64, in production use JWT)
-        let gameId: string, playerId: string;
+        // Player token format: gameId:playerId
+        // Spectator token format: gameId:spectatorId:spectator
+        let gameId: string, memberId: string, isSpectator: boolean;
         try {
           const decoded = Buffer.from(token, 'base64').toString('utf-8');
-          [gameId, playerId] = decoded.split(':');
+          const parts = decoded.split(':');
+          gameId = parts[0];
+          memberId = parts[1];
+          isSpectator = parts[2] === 'spectator';
         } catch {
           return reply.code(401).send({ error: 'Invalid token' });
         }
@@ -130,14 +144,25 @@ export function createServer() {
           return reply.code(404).send({ error: 'Game not found' });
         }
 
-        const player = room.getPlayer(playerId);
-        if (!player) {
-          return reply.code(403).send({ error: 'Player not in room' });
+        if (isSpectator) {
+          const spectator = room.getSpectator(memberId);
+          if (!spectator) {
+            return reply.code(403).send({ error: 'Spectator not in room' });
+          }
+          // Attach validated data to request for wsHandler
+          (request as any).gameRoom = room;
+          (request as any).spectatorId = memberId;
+          (request as any).isSpectator = true;
+        } else {
+          const player = room.getPlayer(memberId);
+          if (!player) {
+            return reply.code(403).send({ error: 'Player not in room' });
+          }
+          // Attach validated data to request for wsHandler
+          (request as any).gameRoom = room;
+          (request as any).playerId = memberId;
+          (request as any).isSpectator = false;
         }
-
-        // Attach validated data to request for wsHandler
-        (request as any).gameRoom = room;
-        (request as any).playerId = playerId;
       },
       handler: (_request, reply) => {
         // HTTP fallback - shouldn't reach here for WS connections
@@ -145,8 +170,14 @@ export function createServer() {
       },
       wsHandler: (socket, request) => {
         const room = (request as any).gameRoom;
-        const playerId = (request as any).playerId;
-        wsHandler.handleConnection(socket, room, playerId);
+        const isSpectator = (request as any).isSpectator;
+        if (isSpectator) {
+          const spectatorId = (request as any).spectatorId;
+          wsHandler.handleSpectatorConnection(socket, room, spectatorId);
+        } else {
+          const playerId = (request as any).playerId;
+          wsHandler.handleConnection(socket, room, playerId);
+        }
       },
     });
   });
@@ -270,6 +301,60 @@ export function createServer() {
   });
 
   /**
+   * Join game as spectator (view-only)
+   */
+  fastify.post<{
+    Params: { id: string };
+    Body: { spectatorName?: string };
+  }>('/api/games/:id/spectate', async (request, reply) => {
+    const { id } = request.params;
+    const { spectatorName } = request.body || {};
+
+    // Normalize game ID to lowercase for case-insensitive lookup
+    const room = rooms.get(id.toLowerCase());
+    if (!room) {
+      return reply.status(404).send({ error: 'Game not found' });
+    }
+
+    const spectatorId = `spec-${nanoid(6)}`;
+
+    const spectator: Spectator = {
+      id: spectatorId,
+      name: spectatorName?.trim() || `Spectator ${room.spectators.length + 1}`,
+      isConnected: false,
+      joinedAt: new Date(),
+    };
+
+    try {
+      room.addSpectator(spectator);
+    } catch (error) {
+      return reply.status(400).send({ error: (error as Error).message });
+    }
+
+    // Persist updated room to storage
+    if (storage) {
+      try {
+        await storage.saveRoom(room.toJSON());
+      } catch (error) {
+        fastify.log.error(`Failed to persist room ${id} after spectator join:`, error);
+      }
+    }
+
+    const spectatorToken = Buffer.from(`${id}:${spectatorId}:spectator`).toString('base64');
+
+    const response: SpectateGameResponse = {
+      gameId: id,
+      spectatorId,
+      spectatorToken,
+      players: room.players,
+      spectators: room.spectators,
+      gameState: room.gameState,
+    };
+
+    return reply.send(response);
+  });
+
+  /**
    * Get game status
    */
   fastify.get<{
@@ -289,6 +374,7 @@ export function createServer() {
       turn: room.gameState?.turn || 0,
       currentPlayer: room.gameState?.currentPlayer || room.hostId,
       players: room.players,
+      spectators: room.spectators,
       gameState: room.gameState,
     };
 

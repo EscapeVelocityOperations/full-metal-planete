@@ -3,19 +3,22 @@
  */
 
 import { GameApp } from './app';
+import { SpectatorApp } from './spectator-app';
 import { LabMode } from './lab-mode';
 import { HomePage } from './ui/home-page';
 
 /**
  * Determine which page to show based on URL
  */
-function getRoute(): 'home' | 'game' | 'lab' {
+function getRoute(): 'home' | 'game' | 'spectator' | 'lab' {
   const params = new URLSearchParams(window.location.search);
   const hasGameParams = params.has('gameId') && params.has('playerId') && params.has('token');
+  const hasSpectatorParams = params.has('gameId') && params.has('spectatorId') && params.has('token') && params.get('spectator') === 'true';
   const isGamePath = window.location.pathname === '/game';
   const isLabPath = window.location.pathname === '/lab';
 
   if (isLabPath) return 'lab';
+  if (hasSpectatorParams) return 'spectator';
   return (hasGameParams || isGamePath) ? 'game' : 'home';
 }
 
@@ -155,6 +158,74 @@ async function showLabPage(): Promise<void> {
   }
 }
 
+/**
+ * Show the spectator page
+ */
+async function showSpectatorPage(): Promise<void> {
+  const homePage = document.getElementById('home-page');
+  const gameContainer = document.getElementById('game-container');
+
+  if (homePage) homePage.classList.add('hidden');
+  if (gameContainer) gameContainer.classList.remove('hidden');
+
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+  if (!canvas) {
+    throw new Error('Canvas element not found');
+  }
+
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  window.addEventListener('resize', () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  const gameId = params.get('gameId')!;
+  const spectatorId = params.get('spectatorId')!;
+  const token = params.get('token')!;
+
+  // Update game ID display in HUD
+  const gameIdEl = document.getElementById('game-id-value');
+  if (gameIdEl) {
+    gameIdEl.textContent = gameId;
+  }
+
+  try {
+    const app = new SpectatorApp(canvas, { gameId, spectatorId, token });
+    await app.initialize();
+    app.startRenderLoop();
+
+    (window as any).spectatorApp = app;
+
+    console.log('Full Metal Planète spectator client started');
+    console.log('Game ID:', gameId);
+    console.log('Spectator ID:', spectatorId);
+  } catch (error) {
+    console.error('Failed to start spectator mode:', error);
+
+    const errorMessage = document.createElement('div');
+    errorMessage.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 0, 0, 0.9);
+      color: white;
+      padding: 30px;
+      border-radius: 8px;
+      font-size: 18px;
+      text-align: center;
+    `;
+    errorMessage.innerHTML = `
+      <h2>Failed to Start Spectator Mode</h2>
+      <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+    `;
+    document.body.appendChild(errorMessage);
+  }
+}
+
 async function main() {
   const route = getRoute();
 
@@ -162,6 +233,8 @@ async function main() {
     showHomePage();
   } else if (route === 'lab') {
     await showLabPage();
+  } else if (route === 'spectator') {
+    await showSpectatorPage();
   } else {
     await showGamePage();
   }

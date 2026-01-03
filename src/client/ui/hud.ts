@@ -1205,6 +1205,55 @@ export class HUD {
   }
 
   /**
+   * Show spectator mode banner
+   */
+  showSpectatorBanner(): void {
+    // Check if banner already exists
+    let banner = document.getElementById('spectator-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'spectator-banner';
+      banner.className = 'spectator-banner';
+      banner.innerHTML = `
+        <span class="spectator-icon">👁</span>
+        <span class="spectator-text">Spectator Mode</span>
+      `;
+      document.body.appendChild(banner);
+    }
+    banner.style.display = 'flex';
+  }
+
+  /**
+   * Hide spectator mode banner
+   */
+  hideSpectatorBanner(): void {
+    const banner = document.getElementById('spectator-banner');
+    if (banner) {
+      banner.style.display = 'none';
+    }
+  }
+
+  /**
+   * Disable interactive controls for spectators
+   */
+  disableSpectatorControls(): void {
+    // Hide end turn button
+    if (this.endTurnBtn) {
+      this.endTurnBtn.style.display = 'none';
+    }
+
+    // Hide ready button
+    if (this.readyBtn) {
+      this.readyBtn.style.display = 'none';
+    }
+
+    // Hide action history panel (spectators don't need undo)
+    if (this.actionHistoryPanel) {
+      this.actionHistoryPanel.style.display = 'none';
+    }
+  }
+
+  /**
    * Clean up resources
    */
   destroy(): void {
@@ -1228,6 +1277,11 @@ export class HUD {
     if (this.actionHistoryPanel) {
       this.actionHistoryPanel.remove();
       this.actionHistoryPanel = null;
+    }
+    // Clean up spectator banner if exists
+    const banner = document.getElementById('spectator-banner');
+    if (banner) {
+      banner.remove();
     }
   }
 }
