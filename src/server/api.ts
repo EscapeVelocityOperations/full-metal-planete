@@ -4,16 +4,59 @@ import websocket from '@fastify/websocket';
 import { nanoid } from 'nanoid';
 import { Room } from './room.js';
 import { WebSocketHandler } from './websocket.js';
-import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameStatusResponse } from './types.js';
+import { initializeStorage, shutdownStorage, getStorage } from './storage/index.js';
+import type { GameStorage } from './storage/types.js';
+import type { Player, PlayerColor, CreateGameResponse, JoinGameResponse, GameStatusResponse, GameRoom } from './types.js';
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
 // Client URL for game links (same as Vite dev server in dev, production URL in prod)
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:10000';
 
+// Cleanup configuration
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_GAME_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_FINISHED_GAME_AGE_MS = 60 * 60 * 1000; // 1 hour for finished games
+
+/**
+ * Restore a Room instance from persisted GameRoom data
+ */
+function restoreRoom(data: GameRoom): Room {
+  // Create a minimal host player for Room constructor
+  const hostPlayer = data.players.find(p => p.id === data.hostId) || data.players[0];
+
+  // Create room with host
+  const room = new Room(data.id, {
+    ...hostPlayer,
+    lastSeen: new Date(hostPlayer.lastSeen),
+  });
+
+  // Restore additional players
+  for (const player of data.players) {
+    if (player.id !== room.hostId) {
+      room.addPlayer({
+        ...player,
+        lastSeen: new Date(player.lastSeen),
+      });
+    }
+  }
+
+  // Restore room state
+  (room as any).state = data.state;
+  (room as any).createdAt = new Date(data.createdAt);
+
+  // Restore game state if exists
+  if (data.gameState) {
+    (room as any).gameState = data.gameState;
+  }
+
+  return room;
+}
+
 export function createServer() {
   const fastify = Fastify({ logger: true });
   const rooms = new Map<string, Room>();
+  let storage: GameStorage | null = null;
   const wsHandler = new WebSocketHandler();
 
   fastify.register(cors, {
@@ -21,6 +64,35 @@ export function createServer() {
   });
 
   fastify.register(websocket);
+
+  /**
+   * Initialize storage and load persisted rooms on startup
+   */
+  fastify.addHook('onReady', async () => {
+    try {
+      storage = await initializeStorage();
+      wsHandler.setStorage(storage);
+      fastify.log.info('Storage initialized');
+
+      // Load existing rooms from storage
+      const roomList = await storage.listRooms();
+      for (const metadata of roomList) {
+        const roomData = await storage.getRoom(metadata.gameId);
+        if (roomData) {
+          const room = restoreRoom(roomData);
+          rooms.set(room.id, room);
+          fastify.log.info(`Restored room ${room.id} (state: ${room.state}, turn: ${room.gameState?.turn || 0})`);
+        }
+      }
+
+      if (roomList.length > 0) {
+        fastify.log.info(`Restored ${roomList.length} rooms from storage`);
+      }
+    } catch (error) {
+      fastify.log.error('Failed to initialize storage:', error);
+      // Continue without persistence - in-memory only
+    }
+  });
 
   // Register WebSocket route AFTER websocket plugin is fully loaded
   fastify.after(() => {
@@ -107,6 +179,15 @@ export function createServer() {
     const room = new Room(gameId, hostPlayer);
     rooms.set(gameId, room);
 
+    // Persist room to storage
+    if (storage) {
+      try {
+        await storage.saveRoom(room.toJSON());
+      } catch (error) {
+        fastify.log.error(`Failed to persist new room ${gameId}:`, error);
+      }
+    }
+
     // Generate simple token (in production, use JWT)
     const playerToken = Buffer.from(`${gameId}:${playerId}`).toString('base64');
 
@@ -167,6 +248,15 @@ export function createServer() {
       return reply.status(400).send({ error: (error as Error).message });
     }
 
+    // Persist updated room to storage
+    if (storage) {
+      try {
+        await storage.saveRoom(room.toJSON());
+      } catch (error) {
+        fastify.log.error(`Failed to persist room ${id} after player join:`, error);
+      }
+    }
+
     const playerToken = Buffer.from(`${id}:${playerId}`).toString('base64');
 
     const response: JoinGameResponse = {
@@ -215,22 +305,52 @@ export function createServer() {
   /**
    * Cleanup old rooms periodically
    */
-  const cleanupInterval = setInterval(() => {
+  const cleanupInterval = setInterval(async () => {
     const now = Date.now();
-    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+    const roomsToDelete: string[] = [];
 
     rooms.forEach((room, id) => {
       const age = now - room.createdAt.getTime();
-      if (age > maxAge || (room.state === 'finished' && age > 60 * 60 * 1000)) {
-        wsHandler.closeRoom(id);
-        rooms.delete(id);
+      const shouldDelete =
+        age > MAX_GAME_AGE_MS ||
+        (room.state === 'finished' && age > MAX_FINISHED_GAME_AGE_MS);
+
+      if (shouldDelete) {
+        roomsToDelete.push(id);
       }
     });
-  }, 60 * 60 * 1000); // Every hour
 
-  fastify.addHook('onClose', () => {
+    for (const id of roomsToDelete) {
+      wsHandler.closeRoom(id);
+      rooms.delete(id);
+
+      // Also delete from storage
+      if (storage) {
+        try {
+          await storage.deleteRoom(id);
+          fastify.log.info(`Cleaned up old room: ${id}`);
+        } catch (error) {
+          fastify.log.error(`Failed to delete room ${id} from storage:`, error);
+        }
+      }
+    }
+
+    if (roomsToDelete.length > 0) {
+      fastify.log.info(`Cleaned up ${roomsToDelete.length} old rooms`);
+    }
+  }, CLEANUP_INTERVAL_MS);
+
+  fastify.addHook('onClose', async () => {
     clearInterval(cleanupInterval);
     wsHandler.stopPingInterval();
+
+    // Shutdown storage connection
+    try {
+      await shutdownStorage();
+      fastify.log.info('Storage shutdown complete');
+    } catch (error) {
+      fastify.log.error('Failed to shutdown storage:', error);
+    }
   });
 
   return fastify;

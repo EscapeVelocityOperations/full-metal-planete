@@ -107,6 +107,9 @@ export class WebSocketHandler {
           if (action.type === 'LAND_ASTRONEF') {
             const landingResult = this.processLandAstronef(room, action as LandAstronefAction);
             if (landingResult.success) {
+              // Checkpoint state after landing
+              await this.checkpointState(room);
+
               // Broadcast state update to ALL players (including sender)
               this.broadcast(room.id, {
                 type: 'STATE_UPDATE',
@@ -309,6 +312,39 @@ export class WebSocketHandler {
       await this.storage.logAction(gameId, storedAction);
     } catch (error) {
       console.error(`Failed to persist action for game ${gameId}:`, error);
+    }
+  }
+
+  /**
+   * Checkpoint game state to storage (called after state-changing actions)
+   */
+  private async checkpointState(room: Room): Promise<void> {
+    if (!this.storage || !room.gameState) return;
+
+    try {
+      // Save current game state
+      await this.storage.saveGameState(room.gameState);
+
+      // Save room state (includes game state reference)
+      await this.storage.saveRoom({
+        id: room.id,
+        state: room.state,
+        hostId: room.hostId,
+        players: room.players.map(p => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          isReady: p.isReady,
+          isConnected: p.isConnected,
+          lastSeen: p.lastSeen,
+        })),
+        createdAt: room.createdAt,
+        gameState: room.gameState,
+      });
+
+      console.log(`Checkpointed game ${room.id} (turn ${room.gameState.turn}, phase ${room.gameState.phase})`);
+    } catch (error) {
+      console.error(`Failed to checkpoint game ${room.id}:`, error);
     }
   }
 
