@@ -35,7 +35,10 @@ export type WSMessageType =
   | 'SYNC_REQUEST'
   | 'LIFTOFF_DECISION'
   | 'LIFTOFF_DECISION_ACK'
-  | 'LIFTOFF_DECISIONS_REVEALED';
+  | 'LIFTOFF_DECISIONS_REVEALED'
+  | 'SPECTATOR_JOINED'
+  | 'SPECTATOR_LEFT'
+  | 'SPECTATOR_SYNC';
 
 // Action types from game
 export type ActionType =
@@ -65,11 +68,19 @@ export interface Player {
   lastSeen: Date;
 }
 
+export interface Spectator {
+  id: string;
+  name: string;
+  isConnected: boolean;
+  joinedAt: Date;
+}
+
 export interface GameRoom {
   id: string;
   state: RoomState;
   hostId: string;
   players: Player[];
+  spectators: Spectator[];
   createdAt: Date;
   gameState?: GameState;
 }
@@ -109,12 +120,22 @@ export interface JoinGameResponse {
   players: Player[];
 }
 
+export interface SpectateGameResponse {
+  gameId: string;
+  spectatorId: string;
+  spectatorToken: string;
+  players: Player[];
+  spectators: Spectator[];
+  gameState?: GameState;
+}
+
 export interface GameStatusResponse {
   gameId: string;
   state: RoomState;
   turn: number;
   currentPlayer: string;
   players: Player[];
+  spectators: Spectator[];
   gameState?: GameState;
 }
 

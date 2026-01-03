@@ -1,10 +1,11 @@
-import type { GameRoom, Player, RoomState, GameState } from './types.js';
+import type { GameRoom, Player, RoomState, GameState, Spectator } from './types.js';
 
 export class Room {
   public id: string;
   public state: RoomState;
   public hostId: string;
   public players: Player[];
+  public spectators: Spectator[];
   public createdAt: Date;
   public gameState?: GameState;
 
@@ -13,6 +14,7 @@ export class Room {
     this.state = 'waiting';
     this.hostId = hostPlayer.id;
     this.players = [hostPlayer];
+    this.spectators = [];
     this.createdAt = new Date();
   }
 
@@ -47,6 +49,41 @@ export class Room {
    */
   getPlayer(playerId: string): Player | undefined {
     return this.players.find(p => p.id === playerId);
+  }
+
+  /**
+   * Add a spectator to the room
+   */
+  addSpectator(spectator: Spectator): void {
+    if (this.spectators.some(s => s.id === spectator.id)) {
+      throw new Error('Spectator already in room');
+    }
+
+    this.spectators.push(spectator);
+  }
+
+  /**
+   * Remove a spectator from the room
+   */
+  removeSpectator(spectatorId: string): void {
+    this.spectators = this.spectators.filter(s => s.id !== spectatorId);
+  }
+
+  /**
+   * Get a spectator by ID
+   */
+  getSpectator(spectatorId: string): Spectator | undefined {
+    return this.spectators.find(s => s.id === spectatorId);
+  }
+
+  /**
+   * Set spectator connection status
+   */
+  setSpectatorConnected(spectatorId: string, connected: boolean): void {
+    const spectator = this.getSpectator(spectatorId);
+    if (spectator) {
+      spectator.isConnected = connected;
+    }
   }
 
   /**
@@ -141,6 +178,7 @@ export class Room {
       state: this.state,
       hostId: this.hostId,
       players: this.players,
+      spectators: this.spectators,
       createdAt: this.createdAt,
       gameState: this.gameState,
     };

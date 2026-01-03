@@ -14,6 +14,7 @@ interface LandAstronefAction extends GameAction {
 
 export class WebSocketHandler {
   private connections: Map<string, Map<string, WebSocket>> = new Map();
+  private spectatorConnections: Map<string, Map<string, WebSocket>> = new Map();
   private pingInterval: NodeJS.Timeout | null = null;
   private storage: GameStorage | null = null;
   private actionSeq: Map<string, number> = new Map();
@@ -93,6 +94,122 @@ export class WebSocketHandler {
     ws.on('error', (error) => {
       console.error(`WebSocket error for player ${playerId}:`, error);
     });
+  }
+
+  /**
+   * Handle new spectator WebSocket connection
+   * Spectators can only receive messages, not send actions
+   */
+  handleSpectatorConnection(ws: WebSocket, room: Room, spectatorId: string): void {
+    if (!this.spectatorConnections.has(room.id)) {
+      this.spectatorConnections.set(room.id, new Map());
+    }
+
+    // Close any existing connection for this spectator
+    const existingWs = this.spectatorConnections.get(room.id)?.get(spectatorId);
+    if (existingWs && existingWs !== ws && existingWs.readyState === 1) {
+      existingWs.close();
+    }
+
+    this.spectatorConnections.get(room.id)!.set(spectatorId, ws);
+    room.setSpectatorConnected(spectatorId, true);
+
+    // Send current game state to spectator
+    this.sendToSpectator(room.id, spectatorId, {
+      type: 'SPECTATOR_SYNC',
+      payload: {
+        gameState: room.gameState,
+        players: room.players,
+        spectators: room.spectators,
+        roomState: room.state,
+      },
+      timestamp: Date.now(),
+    });
+
+    // Notify players that a spectator joined
+    this.broadcast(room.id, {
+      type: 'SPECTATOR_JOINED',
+      payload: { spectator: room.getSpectator(spectatorId) },
+      timestamp: Date.now(),
+    });
+
+    console.log(`Spectator ${spectatorId} joined room ${room.id}`);
+
+    ws.on('message', (data: Buffer) => {
+      this.handleSpectatorMessage(room, spectatorId, data.toString());
+    });
+
+    ws.on('close', () => {
+      this.handleSpectatorDisconnect(room, spectatorId);
+    });
+
+    ws.on('error', (error) => {
+      console.error(`WebSocket error for spectator ${spectatorId}:`, error);
+    });
+  }
+
+  /**
+   * Handle incoming spectator WebSocket message
+   * Spectators can only send PONG (heartbeat), nothing else
+   */
+  private handleSpectatorMessage(room: Room, spectatorId: string, data: string): void {
+    try {
+      const message: WSMessage = JSON.parse(data);
+
+      switch (message.type) {
+        case 'PONG':
+          // Heartbeat - no action needed
+          break;
+        case 'SYNC_REQUEST':
+          // Allow spectators to request sync
+          this.sendToSpectator(room.id, spectatorId, {
+            type: 'SPECTATOR_SYNC',
+            payload: {
+              gameState: room.gameState,
+              players: room.players,
+              spectators: room.spectators,
+              roomState: room.state,
+            },
+            timestamp: Date.now(),
+          });
+          break;
+        default:
+          // Spectators cannot send other message types
+          this.sendToSpectator(room.id, spectatorId, {
+            type: 'ERROR',
+            payload: { code: 'SPECTATOR_READ_ONLY', message: 'Spectators can only watch, not interact' },
+            timestamp: Date.now(),
+          });
+      }
+    } catch (error) {
+      console.error('Error handling spectator message:', error);
+    }
+  }
+
+  /**
+   * Handle spectator disconnect
+   */
+  private handleSpectatorDisconnect(room: Room, spectatorId: string): void {
+    room.setSpectatorConnected(spectatorId, false);
+    const roomSpectators = this.spectatorConnections.get(room.id);
+    if (roomSpectators) {
+      roomSpectators.delete(spectatorId);
+      if (roomSpectators.size === 0) {
+        this.spectatorConnections.delete(room.id);
+      }
+    }
+
+    // Notify players that spectator left
+    this.broadcast(room.id, {
+      type: 'SPECTATOR_LEFT',
+      payload: { spectatorId },
+      timestamp: Date.now(),
+    });
+
+    // Remove spectator from room (they can rejoin with a new token)
+    room.removeSpectator(spectatorId);
+
+    console.log(`Spectator ${spectatorId} left room ${room.id}`);
   }
 
   /**
@@ -235,19 +352,40 @@ export class WebSocketHandler {
   }
 
   /**
-   * Broadcast message to all players in room
+   * Broadcast message to all players and spectators in room
    */
   broadcast(roomId: string, message: WSMessage, exclude: string[] = []): void {
-    const roomConnections = this.connections.get(roomId);
-    if (!roomConnections) return;
-
     const data = JSON.stringify(message);
 
-    roomConnections.forEach((ws, playerId) => {
-      if (!exclude.includes(playerId) && ws.readyState === 1) { // 1 = OPEN
-        ws.send(data);
-      }
-    });
+    // Send to players
+    const roomConnections = this.connections.get(roomId);
+    if (roomConnections) {
+      roomConnections.forEach((ws, playerId) => {
+        if (!exclude.includes(playerId) && ws.readyState === 1) { // 1 = OPEN
+          ws.send(data);
+        }
+      });
+    }
+
+    // Also send to spectators (they see everything)
+    const spectatorConnections = this.spectatorConnections.get(roomId);
+    if (spectatorConnections) {
+      spectatorConnections.forEach((ws, spectatorId) => {
+        if (!exclude.includes(spectatorId) && ws.readyState === 1) {
+          ws.send(data);
+        }
+      });
+    }
+  }
+
+  /**
+   * Send message to specific spectator
+   */
+  sendToSpectator(roomId: string, spectatorId: string, message: WSMessage): void {
+    const ws = this.spectatorConnections.get(roomId)?.get(spectatorId);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(message));
+    }
   }
 
   /**
@@ -276,10 +414,22 @@ export class WebSocketHandler {
    */
   private startPingInterval(): void {
     this.pingInterval = setInterval(() => {
+      const pingMessage = JSON.stringify({ type: 'PING', timestamp: Date.now() });
+
+      // Ping players
       this.connections.forEach((roomConnections) => {
         roomConnections.forEach((ws) => {
           if (ws.readyState === 1) {
-            ws.send(JSON.stringify({ type: 'PING', timestamp: Date.now() }));
+            ws.send(pingMessage);
+          }
+        });
+      });
+
+      // Ping spectators
+      this.spectatorConnections.forEach((roomSpectators) => {
+        roomSpectators.forEach((ws) => {
+          if (ws.readyState === 1) {
+            ws.send(pingMessage);
           }
         });
       });
@@ -297,15 +447,25 @@ export class WebSocketHandler {
   }
 
   /**
-   * Close all connections for a room
+   * Close all connections for a room (players and spectators)
    */
   closeRoom(roomId: string): void {
+    // Close player connections
     const roomConnections = this.connections.get(roomId);
     if (roomConnections) {
       roomConnections.forEach((ws) => {
         ws.close();
       });
       this.connections.delete(roomId);
+    }
+
+    // Close spectator connections
+    const spectatorConnections = this.spectatorConnections.get(roomId);
+    if (spectatorConnections) {
+      spectatorConnections.forEach((ws) => {
+        ws.close();
+      });
+      this.spectatorConnections.delete(roomId);
     }
   }
 
@@ -314,6 +474,13 @@ export class WebSocketHandler {
    */
   getConnectionCount(roomId: string): number {
     return this.connections.get(roomId)?.size || 0;
+  }
+
+  /**
+   * Get spectator count for a room
+   */
+  getSpectatorCount(roomId: string): number {
+    return this.spectatorConnections.get(roomId)?.size || 0;
   }
 
   /**

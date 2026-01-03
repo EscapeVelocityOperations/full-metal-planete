@@ -11,6 +11,12 @@ export interface GameInfo {
   playerToken: string;
 }
 
+export interface SpectatorInfo {
+  gameId: string;
+  spectatorId: string;
+  spectatorToken: string;
+}
+
 export class HomePage {
   private container: HTMLElement;
   private usernameInput: HTMLInputElement | null = null;
@@ -36,6 +42,10 @@ export class HomePage {
     // Join game button
     const joinBtn = document.getElementById('join-game-btn');
     joinBtn?.addEventListener('click', () => this.joinGame());
+
+    // Spectate game button
+    const spectateBtn = document.getElementById('spectate-game-btn');
+    spectateBtn?.addEventListener('click', () => this.spectateGame());
 
     // Save username on change
     this.usernameInput?.addEventListener('change', () => this.saveUsername());
@@ -134,12 +144,52 @@ export class HomePage {
     }
   }
 
+  private async spectateGame(): Promise<void> {
+    const gameId = this.gameIdInput?.value.trim();
+    const spectatorName = this.getUsername();
+
+    if (!gameId) {
+      this.showError('Please enter a Game ID');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/games/${gameId}/spectate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spectatorName }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to spectate game');
+      }
+
+      const data: SpectatorInfo = await response.json();
+
+      // Navigate to spectator view
+      this.navigateToSpectator(data);
+    } catch (error) {
+      this.showError(error instanceof Error ? error.message : 'Failed to spectate game');
+    }
+  }
+
   private navigateToGame(gameInfo: GameInfo): void {
     const url = new URL(window.location.href);
     url.pathname = '/game';
     url.searchParams.set('gameId', gameInfo.gameId);
     url.searchParams.set('playerId', gameInfo.playerId);
     url.searchParams.set('token', gameInfo.playerToken);
+    window.location.href = url.toString();
+  }
+
+  private navigateToSpectator(spectatorInfo: SpectatorInfo): void {
+    const url = new URL(window.location.href);
+    url.pathname = '/game';
+    url.searchParams.set('gameId', spectatorInfo.gameId);
+    url.searchParams.set('spectatorId', spectatorInfo.spectatorId);
+    url.searchParams.set('token', spectatorInfo.spectatorToken);
+    url.searchParams.set('spectator', 'true');
     window.location.href = url.toString();
   }
 

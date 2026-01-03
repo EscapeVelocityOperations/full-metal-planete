@@ -1240,6 +1240,39 @@
         background: rgba(136, 136, 136, 0.1);
       }
 
+      /* Spectator Banner */
+      .spectator-banner {
+        position: absolute;
+        top: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(136, 68, 255, 0.9);
+        color: white;
+        padding: 10px 24px;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        z-index: 20;
+        box-shadow: 0 4px 15px rgba(136, 68, 255, 0.4);
+        animation: spectatorPulse 2s ease-in-out infinite;
+      }
+
+      @keyframes spectatorPulse {
+        0%, 100% { box-shadow: 0 4px 15px rgba(136, 68, 255, 0.4); }
+        50% { box-shadow: 0 4px 25px rgba(136, 68, 255, 0.7); }
+      }
+
+      .home-btn-tertiary {
+        background: rgba(136, 68, 255, 0.2);
+        color: #8844ff;
+        border: 1px solid #8844ff;
+      }
+
+      .home-btn-tertiary:hover {
+        background: rgba(136, 68, 255, 0.3);
+      }
+
       .action-history-item.new {
         animation: slideIn 0.3s ease-out;
         background: rgba(74, 144, 226, 0.2);
@@ -1925,6 +1958,7 @@
           <div class="home-section-title">Game ID</div>
           <input type="text" id="game-id-input" class="home-input" placeholder="Enter game ID" maxlength="10">
           <button id="join-game-btn" class="home-btn home-btn-secondary">Join Game</button>
+          <button id="spectate-game-btn" class="home-btn home-btn-tertiary">Spectate Game</button>
         </div>
 
         <div class="home-divider">or test locally</div>
