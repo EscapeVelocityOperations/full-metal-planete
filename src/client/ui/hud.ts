@@ -178,6 +178,7 @@ export class HUD {
 
   /**
    * Update tide forecast display based on converter count.
+   * Tide forecast is only visible to Converter owners per Section 7 rules.
    * @param forecast Array of future tide levels (0-2 items based on converter count)
    * @param converterCount Number of converters the player owns
    */
@@ -185,17 +186,20 @@ export class HUD {
     // Reset visibility
     this.tideForecast1El.classList.add('hidden');
     this.tideForecast2El.classList.add('hidden');
-    this.tideForecastContainer.classList.remove('no-converter');
 
     if (converterCount === 0) {
-      // No converter - show blurred placeholder
-      this.tideForecastContainer.classList.add('no-converter');
-      this.tideForecast1El.textContent = '?';
-      this.tideForecast1El.className = 'tide-forecast-item unknown';
+      // No converter - hide entire forecast container
+      // Per rules: forecast is only visible to Converter owners
+      this.tideForecastContainer.classList.add('hidden');
       return;
     }
 
+    // Player owns converters - show the forecast container
+    this.tideForecastContainer.classList.remove('hidden');
+
     // Show forecast based on converter count
+    // 1 converter = see 1 turn ahead
+    // 2+ converters = see 2 turns ahead
     if (forecast.length >= 1) {
       this.updateForecastItem(this.tideForecast1El, forecast[0], 1);
     }

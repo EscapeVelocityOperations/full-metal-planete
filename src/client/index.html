@@ -128,15 +128,9 @@
         color: #888;
       }
 
-      #tide-forecast-container.no-converter .tide-forecast-item {
-        filter: blur(4px);
-        opacity: 0.3;
-      }
-
-      .no-converter-warning {
-        font-size: 10px;
-        color: #888;
-        font-style: italic;
+      /* Tide forecast container hidden by default until converter owned */
+      #tide-forecast-container.hidden {
+        display: none;
       }
 
       .action-btn {
@@ -1244,11 +1238,11 @@
             <div class="hud-label">Tide</div>
             <div class="hud-value" id="tide-value">NORMAL</div>
           </div>
-          <div class="hud-item" id="tide-forecast-container">
+          <div class="hud-item hidden" id="tide-forecast-container">
             <div class="hud-label">Forecast</div>
             <div class="tide-forecast" id="tide-forecast">
-              <span class="tide-forecast-item hidden" id="tide-forecast-1">?</span>
-              <span class="tide-forecast-item hidden" id="tide-forecast-2">?</span>
+              <span class="tide-forecast-item hidden" id="tide-forecast-1">+1: ---</span>
+              <span class="tide-forecast-item hidden" id="tide-forecast-2">+2: ---</span>
             </div>
           </div>
           <div class="hud-item">
