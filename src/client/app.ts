@@ -13,7 +13,7 @@ import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type H
 import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainGetter, getOccupiedHexes } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
-import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, type TerrainGetter } from '@/shared/game/combat';
+import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, getHexCoverageInfo, type TerrainGetter, type HexCoverageInfo } from '@/shared/game/combat';
 import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, getMineralStats } from '@/shared/game/state';
 import type { LiftOffDecisionAck, LiftOffDecisionsRevealed } from './game-client';
 
@@ -682,7 +682,11 @@ export class GameApp {
     this.checkMyTurn();
     this.updateLiftOffUI();
     this.updateScoreboard();
+<<<<<<< HEAD
     this.updateMineralStatsDisplay();
+=======
+    this.updateUnderFireZones();
+>>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
     this.render();
   }
 
@@ -1356,23 +1360,41 @@ export class GameApp {
       this.renderer.clearHighlights();
     }
 
+    // Check if destination is under enemy fire
+    const destCoverage = this.getEnemyCoverageAtHex(destination);
+    const isDestUnderFire = destCoverage !== null;
+    const isDestKillzone = destCoverage && destCoverage.count >= 2;
+
     // Highlight the path hexes
     if (this.renderer?.setHighlightedHexes) {
-      // Highlight intermediate hexes as 'range' (blue)
+      // Highlight intermediate hexes as 'range' (blue) or 'danger' if under fire
       const intermediateHexes = path.slice(1, -1);
       if (intermediateHexes.length > 0) {
         this.renderer.setHighlightedHexes(intermediateHexes, 'range');
       }
 
-      // Highlight destination as 'selected' (green) if we have enough AP, 'danger' (yellow) if not
-      const highlightType = apCost <= this.gameState.actionPoints ? 'selected' : 'danger';
-      this.renderer.setHighlightedHexes([destination], highlightType);
+      // Highlight destination based on AP and danger status
+      if (apCost > this.gameState.actionPoints) {
+        this.renderer.setHighlightedHexes([destination], 'danger');
+      } else if (isDestKillzone) {
+        // Use 'target' for killzone (will pulse red)
+        this.renderer.setHighlightedHexes([destination], 'target');
+      } else if (isDestUnderFire) {
+        // Use 'danger' for single-unit coverage (yellow)
+        this.renderer.setHighlightedHexes([destination], 'danger');
+      } else {
+        this.renderer.setHighlightedHexes([destination], 'selected');
+      }
     }
 
-    // Show AP cost message with path length info
+    // Show AP cost message with path length info and danger warning
     const pathInfo = stepsCount > 1 ? ` (${stepsCount} hexes)` : '';
     if (apCost > this.gameState.actionPoints) {
       this.hud.showMessage(`Need ${apCost} AP${pathInfo} (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+    } else if (isDestKillzone) {
+      this.hud.showMessage(`⚠️ KILLZONE! ${apCost} AP${pathInfo} - ${destCoverage!.count} enemies in range - Click to confirm`, 4000);
+    } else if (isDestUnderFire) {
+      this.hud.showMessage(`⚠️ Under fire! ${apCost} AP${pathInfo} - Enemy in range - Click to confirm`, 3500);
     } else {
       this.hud.showMessage(`Move for ${apCost} AP${pathInfo} - Click again to confirm`, 3000);
     }
@@ -1914,6 +1936,7 @@ export class GameApp {
   }
 
   /**
+<<<<<<< HEAD
    * Update the mineral statistics display
    */
   private updateMineralStatsDisplay(): void {
@@ -1938,6 +1961,102 @@ export class GameApp {
       playerColors,
       playerNames,
     });
+=======
+   * Check if a hex is under enemy fire and get coverage info
+   */
+  private getEnemyCoverageAtHex(coord: HexCoord): HexCoverageInfo | null {
+    if (!this.gameState) return null;
+
+    const playerId = this.client['playerId'];
+    const getTerrainAt = this.createTerrainGetter();
+
+    // Check coverage from all enemy players
+    for (const player of this.gameState.players) {
+      if (player.id === playerId) continue;
+
+      const coverage = getHexCoverageInfo(
+        this.gameState.units,
+        player.id,
+        getTerrainAt
+      );
+
+      const info = coverage.get(hexKey(coord));
+      if (info) {
+        return info;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get unit info for display (name and color)
+   */
+  private getUnitDisplayInfo(unitId: string): { name: string; owner: string; color: string } | null {
+    if (!this.gameState) return null;
+
+    const unit = this.gameState.units.find(u => u.id === unitId);
+    if (!unit) return null;
+
+    const player = this.gameState.players.find(p => p.id === unit.owner);
+    const unitTypeName = unit.type.charAt(0).toUpperCase() + unit.type.slice(1);
+
+    return {
+      name: unitTypeName,
+      owner: player?.name || unit.owner,
+      color: player?.color || 'unknown'
+    };
+  }
+
+  /**
+   * Update under-fire zone visualization for all enemy players
+   * Shows hexes that are within firing range of enemy combat units
+   */
+  private updateUnderFireZones(): void {
+    if (!this.gameState || !this.renderer?.setUnderFireZones) return;
+
+    // Only show during main game phase (not landing/deployment)
+    if (this.gameState.phase !== GamePhase.Playing) {
+      this.renderer.clearUnderFireZones?.();
+      return;
+    }
+
+    const playerId = this.client['playerId'];
+    const getTerrainAt = this.createTerrainGetter();
+
+    // Aggregate coverage from all enemy players
+    const aggregatedCoverage = new Map<string, HexCoverageInfo>();
+
+    for (const player of this.gameState.players) {
+      // Skip own units - we don't show friendly fire zones
+      if (player.id === playerId) continue;
+
+      // Get coverage from this enemy player
+      const playerCoverage = getHexCoverageInfo(
+        this.gameState.units,
+        player.id,
+        getTerrainAt
+      );
+
+      // Merge into aggregated coverage
+      for (const [hexKey, info] of playerCoverage) {
+        const existing = aggregatedCoverage.get(hexKey);
+        if (existing) {
+          // Combine coverage from multiple enemies
+          existing.count += info.count;
+          existing.sourceUnits.push(...info.sourceUnits);
+        } else {
+          aggregatedCoverage.set(hexKey, {
+            count: info.count,
+            sourceUnits: [...info.sourceUnits]
+          });
+        }
+      }
+    }
+
+    // Apply the visualization
+    this.renderer.setUnderFireZones(aggregatedCoverage);
+>>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
   }
 
   private checkGameOver(): void {
