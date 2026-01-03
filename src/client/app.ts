@@ -15,7 +15,7 @@ import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainG
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
 import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, getHexCoverageInfo, type TerrainGetter, type HexCoverageInfo } from '@/shared/game/combat';
-import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, getMineralStats } from '@/shared/game/state';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, setLiftOffDecision, getMineralStats } from '@/shared/game/state';
 import type { LiftOffDecisionAck, LiftOffDecisionsRevealed } from './game-client';
 
 export interface GameConfig {
@@ -691,11 +691,8 @@ export class GameApp {
     this.checkMyTurn();
     this.updateLiftOffUI();
     this.updateScoreboard();
-<<<<<<< HEAD
     this.updateMineralStatsDisplay();
-=======
     this.updateUnderFireZones();
->>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
     this.render();
   }
 
@@ -2093,6 +2090,33 @@ export class GameApp {
     // Apply the visualization
     this.renderer.setUnderFireZones(aggregatedCoverage);
 >>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
+  }
+
+  /**
+   * Update the mineral statistics display
+   */
+  private updateMineralStatsDisplay(): void {
+    if (!this.gameState) return;
+
+    const stats = getMineralStats(this.gameState);
+
+    // Build player colors and names maps
+    const playerColors: Record<string, string> = {};
+    const playerNames: Record<string, string> = {};
+    for (const player of this.gameState.players) {
+      playerColors[player.id] = player.color;
+      const lobbyPlayer = this.lobbyPlayers.find(p => p.id === player.id);
+      playerNames[player.id] = lobbyPlayer?.name || player.name;
+    }
+
+    this.hud.updateMineralStats({
+      onBoard: stats.onBoard,
+      underwater: stats.underwater,
+      total: stats.total,
+      byPlayer: stats.byPlayer,
+      playerColors,
+      playerNames,
+    });
   }
 
   private checkGameOver(): void {
