@@ -6,7 +6,7 @@ import { createRenderer, type IHexRenderer, type RendererType } from '@/client/r
 import { TerrainHex } from '@/client/renderer/terrain-layer';
 import { HEX_SIZE } from '@/client/renderer/types';
 import { GameClient } from './game-client';
-import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext } from './ui/hud';
+import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext, type ActionHistoryEntry } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
 import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType, type HexTerrain } from '@/shared/game/types';
@@ -50,6 +50,11 @@ export class GameApp {
   private movementPreviewDestination: HexCoord | null = null;
   private movementPreviewPath: HexCoord[] = [];
   private movementPreviewAPCost: number = 0;
+
+  // Action history and undo state
+  private turnActionHistory: ActionHistoryEntry[] = [];
+  private turnStateSnapshots: GameState[] = [];
+  private actionSequence: number = 0;
 
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
@@ -176,6 +181,10 @@ export class GameApp {
 
     this.hud.onUnload((cargoId: string, destination: HexCoord) => {
       this.handleUnloadCargo(cargoId, destination);
+    });
+
+    this.hud.onUndo(() => {
+      this.handleUndo();
     });
   }
 
@@ -451,6 +460,10 @@ export class GameApp {
 
     // Initialize deployment inventory
     this.initializeDeploymentInventory();
+
+    // Initialize action history panel
+    this.hud.showActionHistory();
+    this.clearTurnActionHistory();
 
     this.updateGameState(gameState);
     this.hud.showScoreboard();
@@ -1073,6 +1086,10 @@ export class GameApp {
       return;
     }
 
+    // Record action for undo BEFORE applying optimistic update
+    const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+    this.recordAction('LOAD', `${unitTypeName} loaded mineral`, 1);
+
     // Send load action to server
     const action: LoadAction = {
       type: 'LOAD',
@@ -1115,6 +1132,10 @@ export class GameApp {
       this.hud.showMessage('Not enough AP (need 1)', 2000);
       return;
     }
+
+    // Record action for undo BEFORE applying optimistic update
+    const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+    this.recordAction('UNLOAD', `${unitTypeName} dropped cargo at (${destination.q},${destination.r})`, 1);
 
     // Send unload action to server
     const action: UnloadAction = {
@@ -1281,6 +1302,11 @@ export class GameApp {
       timestamp: Date.now(),
     };
 
+    // Record action for undo BEFORE applying optimistic update
+    const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
+    const dest = this.movementPreviewDestination;
+    this.recordAction('MOVE', `Moved ${unitTypeName} to (${dest.q},${dest.r})`, apCost);
+
     this.client.sendAction(action);
 
     // Optimistic update
@@ -1385,10 +1411,158 @@ export class GameApp {
   }
 
   /**
+   * Record an action in the turn history and take a state snapshot for undo
+   * Must be called BEFORE applying the action to game state
+   */
+  private recordAction(type: string, description: string, apCost: number): void {
+    if (!this.gameState) return;
+
+    // Take a deep copy of current state for undo
+    const stateSnapshot = JSON.parse(JSON.stringify(this.gameState)) as GameState;
+    this.turnStateSnapshots.push(stateSnapshot);
+
+    // Get player info
+    const playerId = this.client['playerId'];
+    const playerData = this.getPlayerData(playerId);
+
+    // Create action history entry
+    const entry: ActionHistoryEntry = {
+      id: ++this.actionSequence,
+      type,
+      description,
+      apCost,
+      timestamp: Date.now(),
+      playerId,
+      playerColor: playerData?.color || 'red',
+      isOpponent: false,
+    };
+
+    this.turnActionHistory.push(entry);
+
+    // Update HUD
+    this.hud.addActionToHistory(entry);
+    this.hud.setUndoEnabled(true);
+  }
+
+  /**
+   * Handle undo button click - revert to previous state
+   */
+  private handleUndo(): void {
+    if (!this.isMyTurn || this.turnStateSnapshots.length === 0) {
+      this.hud.showMessage('Nothing to undo', 1500);
+      return;
+    }
+
+    // Pop the last state snapshot
+    const previousState = this.turnStateSnapshots.pop()!;
+
+    // Also remove the corresponding action from history
+    const undoneAction = this.turnActionHistory.pop();
+
+    // Restore game state
+    this.gameState = previousState;
+
+    // Update all game state displays
+    this.updateGameState(previousState);
+
+    // Update renderer with restored state
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(previousState.units);
+    }
+    if (this.renderer?.setMinerals) {
+      this.renderer.setMinerals(previousState.minerals);
+    }
+
+    // Update HUD action history
+    this.hud.updateActionHistory(this.turnActionHistory, this.turnStateSnapshots.length > 0);
+    this.hud.setUndoEnabled(this.turnStateSnapshots.length > 0);
+
+    // Deselect any selected unit
+    this.deselectUnit();
+
+    // Show message
+    if (undoneAction) {
+      this.hud.showMessage(`Undid: ${undoneAction.description}`, 2000);
+    } else {
+      this.hud.showMessage('Action undone', 1500);
+    }
+
+    this.render();
+  }
+
+  /**
+   * Clear turn action history (called at turn start/end)
+   */
+  private clearTurnActionHistory(): void {
+    this.turnActionHistory = [];
+    this.turnStateSnapshots = [];
+    this.actionSequence = 0;
+    this.hud.clearActionHistory();
+    this.hud.setUndoEnabled(false);
+  }
+
+  /**
+   * Record opponent action for display (no state snapshot needed)
+   */
+  private recordOpponentAction(action: any): void {
+    const playerId = action.playerId;
+    const playerData = this.getPlayerData(playerId);
+    const isOpponent = playerId !== this.client['playerId'];
+
+    if (!isOpponent) return; // Only record opponent actions here
+
+    let description = '';
+    let apCost = action.apCost || 0;
+
+    switch (action.type) {
+      case 'MOVE':
+        const unit = this.gameState?.units.find(u => u.id === action.unitId);
+        const unitType = unit?.type || 'unit';
+        description = `Moved ${unitType}`;
+        break;
+      case 'LOAD':
+        description = 'Loaded cargo';
+        break;
+      case 'UNLOAD':
+        description = 'Unloaded cargo';
+        break;
+      case 'FIRE':
+        description = 'Fired weapon';
+        break;
+      case 'LAND_ASTRONEF':
+        description = 'Landed astronef';
+        apCost = 0;
+        break;
+      case 'LIFT_OFF':
+        description = 'Lifted off';
+        break;
+      default:
+        description = action.type;
+    }
+
+    const entry: ActionHistoryEntry = {
+      id: ++this.actionSequence,
+      type: action.type,
+      description,
+      apCost,
+      timestamp: Date.now(),
+      playerId,
+      playerColor: playerData?.color || 'gray',
+      isOpponent: true,
+    };
+
+    this.turnActionHistory.push(entry);
+    this.hud.addActionToHistory(entry);
+  }
+
+  /**
    * Handle action from server
    */
   private handleAction(action: any): void {
     if (!this.gameState) return;
+
+    // Record opponent actions for live viewing
+    this.recordOpponentAction(action);
 
     switch (action.type) {
       case 'MOVE': {
@@ -1437,6 +1611,9 @@ export class GameApp {
    */
   private handleTurnEnd(data?: { playerId: string; savedAP: number }): void {
     if (!this.gameState) return;
+
+    // Clear action history when turn changes
+    this.clearTurnActionHistory();
 
     if (data) {
       const nextPlayerIndex =

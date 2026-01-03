@@ -26,6 +26,17 @@ export interface UnitActionContext {
   adjacentHexes: HexCoord[];  // Valid hexes for dropping cargo
 }
 
+export interface ActionHistoryEntry {
+  id: number;                // Sequence number within turn
+  type: string;              // Action type (MOVE, LOAD, etc)
+  description: string;       // Human-readable description
+  apCost: number;           // AP spent
+  timestamp: number;        // When action occurred
+  playerId: string;         // Who performed it
+  playerColor: string;      // For display
+  isOpponent: boolean;      // Was this an opponent's action?
+}
+
 const PHASE_INSTRUCTIONS: Record<GamePhase, string> = {
   landing: '<strong>Landing Phase (Turn 1):</strong> Position your Astronef on the map. Click on valid land or marsh hexes to place your 4-hex spacecraft. <br><em>Press <kbd>R</kbd> to rotate before placing.</em>',
   deployment: '<strong>Deployment Phase (Turn 2):</strong> Deploy your units from the Astronef. Select a unit from inventory and click adjacent hexes to deploy. <br><em>Press <kbd>R</kbd> to rotate selected unit.</em>',
@@ -971,6 +982,212 @@ export class HUD {
     }
   }
 
+  // ============================================================================
+  // Action History & Undo
+  // ============================================================================
+
+  private actionHistoryPanel: HTMLElement | null = null;
+  private actionHistoryList: HTMLElement | null = null;
+  private undoBtn: HTMLButtonElement | null = null;
+  private undoCallback: (() => void) | null = null;
+  private actionHistoryExpanded: boolean = true;
+
+  /**
+   * Show action history panel
+   */
+  showActionHistory(): void {
+    if (!this.actionHistoryPanel) {
+      this.createActionHistoryPanel();
+    }
+    this.actionHistoryPanel!.classList.remove('hidden');
+  }
+
+  /**
+   * Hide action history panel
+   */
+  hideActionHistory(): void {
+    if (this.actionHistoryPanel) {
+      this.actionHistoryPanel.classList.add('hidden');
+    }
+  }
+
+  /**
+   * Create the action history panel DOM structure
+   */
+  private createActionHistoryPanel(): void {
+    this.actionHistoryPanel = document.createElement('div');
+    this.actionHistoryPanel.id = 'action-history-panel';
+    this.actionHistoryPanel.className = 'action-history-panel';
+    this.actionHistoryPanel.innerHTML = `
+      <div class="action-history-header">
+        <h3>Turn Actions</h3>
+        <div class="action-history-controls">
+          <button id="undo-btn" class="btn btn-undo" disabled title="Undo last action">
+            ↩ Undo
+          </button>
+          <button id="action-history-toggle" class="btn btn-toggle">▼</button>
+        </div>
+      </div>
+      <div id="action-history-content" class="action-history-content">
+        <ul id="action-history-list" class="action-history-list">
+          <li class="action-history-empty">No actions this turn</li>
+        </ul>
+      </div>
+    `;
+
+    document.body.appendChild(this.actionHistoryPanel);
+
+    this.actionHistoryList = document.getElementById('action-history-list');
+    this.undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
+
+    // Toggle expand/collapse
+    const toggleBtn = document.getElementById('action-history-toggle');
+    toggleBtn?.addEventListener('click', () => {
+      this.toggleActionHistory();
+    });
+
+    // Undo button
+    this.undoBtn?.addEventListener('click', () => {
+      if (this.undoCallback) {
+        this.undoCallback();
+      }
+    });
+  }
+
+  /**
+   * Toggle action history expand/collapse
+   */
+  private toggleActionHistory(): void {
+    this.actionHistoryExpanded = !this.actionHistoryExpanded;
+    const content = document.getElementById('action-history-content');
+    const toggleBtn = document.getElementById('action-history-toggle');
+
+    if (content) {
+      content.classList.toggle('collapsed', !this.actionHistoryExpanded);
+    }
+    if (toggleBtn) {
+      toggleBtn.textContent = this.actionHistoryExpanded ? '▼' : '▲';
+    }
+  }
+
+  /**
+   * Update the action history list
+   */
+  updateActionHistory(actions: ActionHistoryEntry[], canUndo: boolean): void {
+    if (!this.actionHistoryList) {
+      this.createActionHistoryPanel();
+    }
+
+    if (!this.actionHistoryList) return;
+
+    if (actions.length === 0) {
+      this.actionHistoryList.innerHTML = '<li class="action-history-empty">No actions this turn</li>';
+    } else {
+      this.actionHistoryList.innerHTML = actions.map(action => `
+        <li class="action-history-item ${action.isOpponent ? 'opponent' : 'self'}">
+          <span class="action-icon">${this.getActionIcon(action.type)}</span>
+          <span class="action-details">
+            <span class="action-desc">${action.description}</span>
+            <span class="action-meta">
+              <span class="action-player" style="color: ${this.getPlayerColorHex(action.playerColor)}">${action.isOpponent ? '👁' : ''}</span>
+              <span class="action-ap">${action.apCost > 0 ? `-${action.apCost} AP` : ''}</span>
+            </span>
+          </span>
+        </li>
+      `).join('');
+    }
+
+    // Update undo button state
+    if (this.undoBtn) {
+      this.undoBtn.disabled = !canUndo;
+      this.undoBtn.title = canUndo ? 'Undo last action' : 'Nothing to undo';
+    }
+  }
+
+  /**
+   * Get an icon for an action type
+   */
+  private getActionIcon(type: string): string {
+    const icons: Record<string, string> = {
+      'MOVE': '🚗',
+      'LOAD': '📦',
+      'UNLOAD': '📤',
+      'FIRE': '💥',
+      'CAPTURE': '🎯',
+      'BUILD': '🔧',
+      'ENTER_ASTRONEF': '🚀',
+      'EXIT_ASTRONEF': '🚪',
+      'LAND_ASTRONEF': '🛬',
+      'DEPLOY_UNIT': '📍',
+      'LIFT_OFF': '🚀',
+      'RETREAT': '🏃',
+      'END_TURN': '⏭️',
+    };
+    return icons[type] || '•';
+  }
+
+  /**
+   * Set undo button click handler
+   */
+  onUndo(callback: () => void): void {
+    this.undoCallback = callback;
+  }
+
+  /**
+   * Enable or disable the undo button
+   */
+  setUndoEnabled(enabled: boolean): void {
+    if (this.undoBtn) {
+      this.undoBtn.disabled = !enabled;
+    }
+  }
+
+  /**
+   * Add a new action to the history (with animation)
+   */
+  addActionToHistory(action: ActionHistoryEntry): void {
+    if (!this.actionHistoryList) return;
+
+    // Remove "no actions" message if present
+    const emptyMsg = this.actionHistoryList.querySelector('.action-history-empty');
+    if (emptyMsg) {
+      emptyMsg.remove();
+    }
+
+    const li = document.createElement('li');
+    li.className = `action-history-item ${action.isOpponent ? 'opponent' : 'self'} new`;
+    li.innerHTML = `
+      <span class="action-icon">${this.getActionIcon(action.type)}</span>
+      <span class="action-details">
+        <span class="action-desc">${action.description}</span>
+        <span class="action-meta">
+          <span class="action-player" style="color: ${this.getPlayerColorHex(action.playerColor)}">${action.isOpponent ? '👁' : ''}</span>
+          <span class="action-ap">${action.apCost > 0 ? `-${action.apCost} AP` : ''}</span>
+        </span>
+      </span>
+    `;
+
+    // Prepend (newest at top) or append (newest at bottom)
+    this.actionHistoryList.prepend(li);
+
+    // Remove "new" class after animation
+    setTimeout(() => {
+      li.classList.remove('new');
+    }, 500);
+  }
+
+  /**
+   * Clear action history (e.g., on new turn)
+   */
+  clearActionHistory(): void {
+    if (this.actionHistoryList) {
+      this.actionHistoryList.innerHTML = '<li class="action-history-empty">No actions this turn</li>';
+    }
+    if (this.undoBtn) {
+      this.undoBtn.disabled = true;
+    }
+  }
+
   /**
    * Clean up resources
    */
@@ -991,6 +1208,10 @@ export class HUD {
     if (this.apSaveModal) {
       this.apSaveModal.remove();
       this.apSaveModal = null;
+    }
+    if (this.actionHistoryPanel) {
+      this.actionHistoryPanel.remove();
+      this.actionHistoryPanel = null;
     }
   }
 }
