@@ -2182,6 +2182,103 @@ export class GameApp {
     this.renderer.setUnderFireZones(aggregatedCoverage);
   }
 
+  /**
+   * Check if a hex is under enemy fire and get coverage info
+   */
+  private getEnemyCoverageAtHex(coord: HexCoord): HexCoverageInfo | null {
+    if (!this.gameState) return null;
+
+    const playerId = this.client['playerId'];
+    const getTerrainAt = this.createTerrainGetter();
+
+    // Check coverage from all enemy players
+    for (const player of this.gameState.players) {
+      if (player.id === playerId) continue;
+
+      const coverage = getHexCoverageInfo(
+        this.gameState.units,
+        player.id,
+        getTerrainAt
+      );
+
+      const info = coverage.get(hexKey(coord));
+      if (info) {
+        return info;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get unit info for display (name and color)
+   */
+  private getUnitDisplayInfo(unitId: string): { name: string; owner: string; color: string } | null {
+    if (!this.gameState) return null;
+
+    const unit = this.gameState.units.find(u => u.id === unitId);
+    if (!unit) return null;
+
+    const player = this.gameState.players.find(p => p.id === unit.owner);
+    const unitTypeName = unit.type.charAt(0).toUpperCase() + unit.type.slice(1);
+
+    return {
+      name: unitTypeName,
+      owner: player?.name || unit.owner,
+      color: player?.color || 'unknown'
+    };
+  }
+
+  /**
+   * Update under-fire zone visualization for all enemy players
+   * Shows hexes that are within firing range of enemy combat units
+   */
+  private updateUnderFireZones(): void {
+    if (!this.gameState || !this.renderer?.setUnderFireZones) return;
+
+    // Only show during main game phase (not landing/deployment)
+    if (this.gameState.phase !== GamePhase.Playing) {
+      this.renderer.clearUnderFireZones?.();
+      return;
+    }
+
+    const playerId = this.client['playerId'];
+    const getTerrainAt = this.createTerrainGetter();
+
+    // Aggregate coverage from all enemy players
+    const aggregatedCoverage = new Map<string, HexCoverageInfo>();
+
+    for (const player of this.gameState.players) {
+      // Skip own units - we don't show friendly fire zones
+      if (player.id === playerId) continue;
+
+      // Get coverage from this enemy player
+      const playerCoverage = getHexCoverageInfo(
+        this.gameState.units,
+        player.id,
+        getTerrainAt
+      );
+
+      // Merge into aggregated coverage
+      for (const [hexKey, info] of playerCoverage) {
+        const existing = aggregatedCoverage.get(hexKey);
+        if (existing) {
+          // Combine coverage from multiple enemies
+          existing.count += info.count;
+          existing.sourceUnits.push(...info.sourceUnits);
+        } else {
+          aggregatedCoverage.set(hexKey, {
+            count: info.count,
+            sourceUnits: [...info.sourceUnits]
+          });
+        }
+      }
+    }
+
+    // Apply the visualization
+    this.renderer.setUnderFireZones(aggregatedCoverage);
+  }
+
   private checkGameOver(): void {
     if (!this.gameState) return;
 
