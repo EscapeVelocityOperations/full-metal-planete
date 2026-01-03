@@ -22,7 +22,7 @@ import {
   type RebuildTowerAction,
 } from './types';
 import { hexDistance, hexKey, hexNeighbors, getUnitFootprint, getOccupiedHexes } from './hex';
-import { canUnitEnterTerrain, getEffectiveTerrain } from './terrain';
+import { canUnitEnterTerrain, getEffectiveTerrain, canVoluntarilyNeutralize, getVoluntaryNeutralizationResult } from './terrain';
 import { getHexesUnderFire, canDestroyTarget, canCaptureTarget, type TerrainGetter } from './combat';
 
 // ============================================================================
@@ -96,6 +96,8 @@ export function calculateMoveCost(path: HexCoord[], unitType: UnitType): number 
 
 export interface ActionValidationResult extends ValidationResult {
   apCost?: number;
+  /** If the move involves voluntary neutralization, indicates resulting status */
+  voluntaryNeutralization?: 'stuck' | 'grounded';
 }
 
 // ============================================================================
@@ -243,11 +245,19 @@ export function validateMoveAction(
     // For multi-hex units, validate ALL hexes in the footprint
     if (isMultiHexUnit) {
       const footprint = getUnitFootprint(unit.type, to, unitRotation);
+      const isLastStep = i === path.length - 1;
+      let hasVoluntaryNeutralization = false;
+
       for (const footprintHex of footprint) {
         // Check terrain is valid for each hex in footprint
         const terrain = getTerrainAt(footprintHex);
         if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
-          return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+          // Check if this is a valid voluntary neutralization (only allowed on final step)
+          if (isLastStep && canVoluntarilyNeutralize(unit.type, terrain, state.currentTide)) {
+            hasVoluntaryNeutralization = true;
+          } else {
+            return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+          }
         }
 
         // Check not under enemy fire for any hex in footprint
@@ -257,7 +267,7 @@ export function validateMoveAction(
       }
 
       // Check for collisions with other units at final destination
-      if (i === path.length - 1) {
+      if (isLastStep) {
         const occupiedHexes = getOccupiedHexes(state.units.filter((u) => u.id !== unitId));
         for (const footprintHex of footprint) {
           if (occupiedHexes.has(hexKey(footprintHex))) {
@@ -268,12 +278,22 @@ export function validateMoveAction(
     } else {
       // Single-hex unit validation (original logic)
       const terrain = getTerrainAt(to);
+      const isLastStep = i === path.length - 1;
+
       if (!canUnitEnterTerrain(unit.type, terrain, state.currentTide)) {
-        return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+        // Check if this is a valid voluntary neutralization (only allowed on final hex)
+        // Per rules Section 3.4: "A unit may voluntarily enter impassable terrain
+        // and become stuck/grounded on the first impassable hex."
+        if (isLastStep && canVoluntarilyNeutralize(unit.type, terrain, state.currentTide)) {
+          // Voluntary neutralization is valid - unit will become stuck/grounded
+          // Continue validation, we'll mark this in the result
+        } else {
+          return { valid: false, error: `Unit cannot enter ${terrain} terrain at step ${i}` };
+        }
       }
 
       // Check not occupied (only final hex matters for single-hex units)
-      if (i === path.length - 1 && isHexOccupied(state, to, unitId)) {
+      if (isLastStep && isHexOccupied(state, to, unitId)) {
         return { valid: false, error: 'Destination hex is occupied' };
       }
 
@@ -282,6 +302,15 @@ export function validateMoveAction(
         return { valid: false, error: `Cannot move into hex under fire at step ${i}` };
       }
     }
+  }
+
+  // Check if final destination involves voluntary neutralization
+  const finalHex = path[path.length - 1];
+  const finalTerrain = getTerrainAt(finalHex);
+  const neutralizationResult = getVoluntaryNeutralizationResult(unit.type, finalTerrain, state.currentTide);
+
+  if (neutralizationResult) {
+    return { valid: true, apCost: cost, voluntaryNeutralization: neutralizationResult };
   }
 
   return { valid: true, apCost: cost };

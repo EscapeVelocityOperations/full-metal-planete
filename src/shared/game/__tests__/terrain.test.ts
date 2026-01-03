@@ -6,6 +6,8 @@ import {
   isUnitGrounded,
   canCollectMineral,
   getTerrainMovementEffect,
+  canVoluntarilyNeutralize,
+  getVoluntaryNeutralizationResult,
 } from '../terrain';
 import { TerrainType, TideLevel, UnitType } from '../types';
 
@@ -527,6 +529,134 @@ describe('Terrain Edge Cases', () => {
 
     it('should return blocked for SuperTank trying to enter mountain', () => {
       expect(getTerrainMovementEffect(UnitType.SuperTank, TerrainType.Mountain, TideLevel.Normal)).toBe('blocked');
+    });
+  });
+});
+
+describe('Voluntary Neutralization (Section 3.4)', () => {
+  describe('canVoluntarilyNeutralize', () => {
+    describe('Land units can voluntarily neutralize on variable terrain that becomes sea', () => {
+      it('should allow Tank to enter marsh at high tide (becomes stuck)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Marsh, TideLevel.High)).toBe(true);
+      });
+
+      it('should allow Tank to enter reef at normal tide (becomes stuck)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Reef, TideLevel.Normal)).toBe(true);
+      });
+
+      it('should allow Tank to enter reef at high tide (becomes stuck)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Reef, TideLevel.High)).toBe(true);
+      });
+
+      it('should NOT allow Tank to enter permanent sea (blocked, not voluntary neutralization)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Sea, TideLevel.Normal)).toBe(false);
+      });
+
+      it('should NOT allow Tank to enter passable terrain (normal move, not voluntary neutralization)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Land, TideLevel.Normal)).toBe(false);
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Marsh, TideLevel.Normal)).toBe(false);
+        expect(canVoluntarilyNeutralize(UnitType.Tank, TerrainType.Reef, TideLevel.Low)).toBe(false);
+      });
+    });
+
+    describe('Sea units can voluntarily neutralize on variable terrain that becomes land', () => {
+      it('should allow MotorBoat to enter marsh at low tide (becomes grounded)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Marsh, TideLevel.Low)).toBe(true);
+      });
+
+      it('should allow MotorBoat to enter marsh at normal tide (becomes grounded)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Marsh, TideLevel.Normal)).toBe(true);
+      });
+
+      it('should allow MotorBoat to enter reef at low tide (becomes grounded)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Reef, TideLevel.Low)).toBe(true);
+      });
+
+      it('should allow Barge to enter marsh at low tide (becomes grounded)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Barge, TerrainType.Marsh, TideLevel.Low)).toBe(true);
+      });
+
+      it('should NOT allow MotorBoat to enter permanent land (blocked)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Land, TideLevel.Normal)).toBe(false);
+      });
+
+      it('should NOT allow MotorBoat to enter mountain (blocked)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Mountain, TideLevel.Normal)).toBe(false);
+      });
+
+      it('should NOT allow MotorBoat to enter passable terrain (normal move)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Sea, TideLevel.Normal)).toBe(false);
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Marsh, TideLevel.High)).toBe(false);
+        expect(canVoluntarilyNeutralize(UnitType.MotorBoat, TerrainType.Reef, TideLevel.Normal)).toBe(false);
+      });
+    });
+
+    describe('Fixed and inert units cannot voluntarily neutralize', () => {
+      it('should NOT allow Tower to voluntarily neutralize', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Tower, TerrainType.Marsh, TideLevel.High)).toBe(false);
+      });
+
+      it('should NOT allow Bridge to voluntarily neutralize', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Bridge, TerrainType.Marsh, TideLevel.High)).toBe(false);
+      });
+
+      it('should NOT allow Astronef to voluntarily neutralize', () => {
+        expect(canVoluntarilyNeutralize(UnitType.Astronef, TerrainType.Marsh, TideLevel.High)).toBe(false);
+      });
+    });
+
+    describe('SuperTank cannot voluntarily neutralize on mountain', () => {
+      it('should NOT allow SuperTank to enter mountain (blocked, not stuck)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.SuperTank, TerrainType.Mountain, TideLevel.Normal)).toBe(false);
+      });
+
+      it('should allow SuperTank to enter reef at normal tide (becomes stuck)', () => {
+        expect(canVoluntarilyNeutralize(UnitType.SuperTank, TerrainType.Reef, TideLevel.Normal)).toBe(true);
+      });
+    });
+  });
+
+  describe('getVoluntaryNeutralizationResult', () => {
+    describe('Returns stuck for land units on flooded variable terrain', () => {
+      it('should return stuck for Tank on marsh at high tide', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.Tank, TerrainType.Marsh, TideLevel.High)).toBe('stuck');
+      });
+
+      it('should return stuck for Tank on reef at normal tide', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.Tank, TerrainType.Reef, TideLevel.Normal)).toBe('stuck');
+      });
+
+      it('should return stuck for Crab on marsh at high tide', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.Crab, TerrainType.Marsh, TideLevel.High)).toBe('stuck');
+      });
+    });
+
+    describe('Returns grounded for sea units on exposed variable terrain', () => {
+      it('should return grounded for MotorBoat on marsh at low tide', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.MotorBoat, TerrainType.Marsh, TideLevel.Low)).toBe('grounded');
+      });
+
+      it('should return grounded for Barge on reef at low tide', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.Barge, TerrainType.Reef, TideLevel.Low)).toBe('grounded');
+      });
+    });
+
+    describe('Returns null for normal movement or blocked terrain', () => {
+      it('should return null for Tank on passable land', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.Tank, TerrainType.Land, TideLevel.Normal)).toBe(null);
+      });
+
+      it('should return null for Tank on blocked permanent sea', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.Tank, TerrainType.Sea, TideLevel.Normal)).toBe(null);
+      });
+
+      it('should return null for MotorBoat on passable sea', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.MotorBoat, TerrainType.Sea, TideLevel.Normal)).toBe(null);
+      });
+
+      it('should return null for MotorBoat on blocked land', () => {
+        expect(getVoluntaryNeutralizationResult(UnitType.MotorBoat, TerrainType.Land, TideLevel.Normal)).toBe(null);
+      });
     });
   });
 });
