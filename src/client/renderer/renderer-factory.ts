@@ -7,6 +7,7 @@ import { CSSHexRenderer } from './css/css-renderer';
 import type { TerrainHex } from './terrain-layer';
 import type { TideLevel, Viewport, RendererCapabilities, RendererBackend } from './types';
 import type { Unit } from '@/shared/game/types';
+import type { PerformanceProfile, OptimizationSettings } from './css/performance';
 
 /**
  * Unified renderer interface
@@ -51,6 +52,11 @@ export interface IHexRenderer {
   // Unit selection highlighting
   setUnitSelected?(unitId: string, selected: boolean): void;
   clearUnitSelections?(): void;
+
+  // Performance (CSS renderer only)
+  getPerformanceProfile?(): PerformanceProfile;
+  getOptimizationSettings?(): OptimizationSettings;
+  setPerformanceTier?(tier: 'high' | 'medium' | 'low'): void;
 }
 
 export type RendererType = 'auto' | 'webgpu' | 'css';
