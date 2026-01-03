@@ -9,4 +9,11 @@ export {
   validateOfficialMap,
   getOfficialMapStats,
   OFFICIAL_MAP_DIMENSIONS,
+  // Landing zone functions
+  TOTAL_LANDING_ZONES,
+  calculateLandingZone,
+  getZoneDistance,
+  isLandingZoneValid,
+  getZoneHexes,
+  getZoneBoundaryHexes,
 } from './official-map';

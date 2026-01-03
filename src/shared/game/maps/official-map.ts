@@ -969,10 +969,19 @@ export function generateOfficialMap(): HexTerrain[] {
     const row = OFFICIAL_MAP_DATA[r];
     for (let q = 0; q < row.length; q++) {
       const code = row[q];
-      terrain.push({
+      const terrainType = TERRAIN_MAP[code];
+      const hex: HexTerrain = {
         coord: { q, r },
-        type: TERRAIN_MAP[code],
-      });
+        type: terrainType,
+      };
+
+      // Calculate and assign landing zone for valid landing terrain
+      const zone = calculateLandingZone(q, r, terrainType);
+      if (zone !== undefined) {
+        hex.landingZone = zone;
+      }
+
+      terrain.push(hex);
     }
   }
 
@@ -1053,4 +1062,180 @@ export function getOfficialMapStats(): Record<string, number> {
   });
 
   return counts;
+}
+
+// ============================================================================
+// Landing Zone System
+// ============================================================================
+
+/**
+ * Total number of landing zones on the map.
+ * The board is divided into 8 zones arranged clockwise around the landmass.
+ */
+export const TOTAL_LANDING_ZONES = 8;
+
+/**
+ * Map center point (approximately center of the hex grid).
+ * Used for calculating landing zone based on angular position.
+ */
+const MAP_CENTER = { q: 18, r: 11 };
+
+/**
+ * Calculate which landing zone a hex belongs to based on its position.
+ * Zones are numbered 1-8, arranged clockwise from the top.
+ * Only land and marsh hexes can be landing zones (astronef landing terrain).
+ *
+ * @param q - Column coordinate
+ * @param r - Row coordinate
+ * @param terrainType - The terrain type at this hex
+ * @returns Zone number (1-8) or undefined if not a valid landing zone
+ */
+export function calculateLandingZone(
+  q: number,
+  r: number,
+  terrainType: TerrainType
+): number | undefined {
+  // Only land and marsh can be landing zones (astronef landing terrain)
+  if (terrainType !== TerrainType.Land && terrainType !== TerrainType.Marsh) {
+    return undefined;
+  }
+
+  // Calculate angle from center (in radians)
+  // Note: For flat-top hexes, we need to convert axial to pixel-like coordinates
+  // Hex to approximate pixel: x = q * 1.5, y = r * sqrt(3) + q * sqrt(3)/2
+  const dx = q - MAP_CENTER.q;
+  const dy = r - MAP_CENTER.r + dx * 0.5; // Approximate vertical offset
+
+  // Calculate angle (0 = right, going counter-clockwise)
+  let angle = Math.atan2(dy, dx);
+
+  // Convert to clockwise from top (0 = top, increasing clockwise)
+  // atan2 gives: 0 = right, π/2 = down, π = left, -π/2 = up
+  // We want: 0 = up, π/2 = right, π = down, 3π/2 = left
+  angle = -angle + Math.PI / 2;
+
+  // Normalize to 0..2π
+  if (angle < 0) {
+    angle += 2 * Math.PI;
+  }
+
+  // Divide into 8 zones (each zone is 45 degrees = π/4 radians)
+  const zoneIndex = Math.floor(angle / (Math.PI / 4));
+
+  // Return zone number (1-8)
+  return (zoneIndex % TOTAL_LANDING_ZONES) + 1;
+}
+
+/**
+ * Calculate the distance between two landing zones.
+ * Since zones are arranged in a circle, distance is the minimum of
+ * clockwise and counter-clockwise paths.
+ *
+ * @param zone1 - First zone number (1-8)
+ * @param zone2 - Second zone number (1-8)
+ * @returns Distance between zones (0-4)
+ */
+export function getZoneDistance(zone1: number, zone2: number): number {
+  const diff = Math.abs(zone1 - zone2);
+  // Take minimum of direct distance and wrap-around distance
+  return Math.min(diff, TOTAL_LANDING_ZONES - diff);
+}
+
+/**
+ * Check if a landing position is valid considering existing astronef positions.
+ * Rules per Section 12:
+ * - Player 1 can choose any zone
+ * - Subsequent players must land at least 2 zones away from existing astronefs
+ *
+ * @param targetZone - The zone where the player wants to land
+ * @param existingZones - Array of zones where other astronefs have already landed
+ * @returns True if landing is allowed
+ */
+export function isLandingZoneValid(
+  targetZone: number,
+  existingZones: number[]
+): boolean {
+  // If no existing astronefs, any zone is valid
+  if (existingZones.length === 0) {
+    return true;
+  }
+
+  // Check distance from all existing astronef zones
+  for (const existingZone of existingZones) {
+    const distance = getZoneDistance(targetZone, existingZone);
+    // Must be at least 2 zones away
+    if (distance < 2) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Get all hexes that belong to a specific landing zone.
+ * Useful for visualization and validation.
+ *
+ * @param terrain - The map terrain array
+ * @param zone - Zone number (1-8)
+ * @returns Array of hex coordinates in the zone
+ */
+export function getZoneHexes(
+  terrain: HexTerrain[],
+  zone: number
+): { q: number; r: number }[] {
+  return terrain
+    .filter((t) => t.landingZone === zone)
+    .map((t) => t.coord);
+}
+
+/**
+ * Get landing zone boundaries for visualization.
+ * Returns hexes that are on the edge of their zone (adjacent to a different zone).
+ *
+ * @param terrain - The map terrain array
+ * @returns Array of boundary hexes with their zone number
+ */
+export function getZoneBoundaryHexes(
+  terrain: HexTerrain[]
+): Array<{ coord: { q: number; r: number }; zone: number }> {
+  const terrainMap = new Map<string, HexTerrain>();
+  for (const t of terrain) {
+    terrainMap.set(`${t.coord.q},${t.coord.r}`, t);
+  }
+
+  const boundaries: Array<{ coord: { q: number; r: number }; zone: number }> = [];
+
+  // Direction offsets for flat-top hexes
+  const directions = [
+    { q: 1, r: 0 },   // E
+    { q: 1, r: -1 },  // NE
+    { q: 0, r: -1 },  // NW
+    { q: -1, r: 0 },  // W
+    { q: -1, r: 1 },  // SW
+    { q: 0, r: 1 },   // SE
+  ];
+
+  for (const hex of terrain) {
+    if (!hex.landingZone) continue;
+
+    // Check if any neighbor is in a different zone
+    let isBoundary = false;
+    for (const dir of directions) {
+      const neighborKey = `${hex.coord.q + dir.q},${hex.coord.r + dir.r}`;
+      const neighbor = terrainMap.get(neighborKey);
+
+      // Boundary if neighbor is in different zone or not a landing zone
+      if (!neighbor?.landingZone || neighbor.landingZone !== hex.landingZone) {
+        isBoundary = true;
+        break;
+      }
+    }
+
+    if (isBoundary) {
+      boundaries.push({ coord: hex.coord, zone: hex.landingZone });
+    }
+  }
+
+  return boundaries;
 }
