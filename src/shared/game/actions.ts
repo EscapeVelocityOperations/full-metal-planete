@@ -1208,13 +1208,13 @@ export function validatePlaceBridgeAction(
   }
 
   // Check not under enemy fire
-  const getTerrainAt2 = createTerrainGetter(state.terrain);
-  const enemyPlayers2 = state.players
+  const getTerrainAt = createTerrainGetter(state.terrain);
+  const enemyPlayers = state.players
     .filter((p) => p.id !== state.currentPlayer)
     .map((p) => p.id);
 
-  for (const enemyId of enemyPlayers2) {
-    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt2);
+  for (const enemyId of enemyPlayers) {
+    const underFire = getHexesUnderFire(state.units, enemyId, getTerrainAt);
     if (underFire.has(hexKey(action.position))) {
       return { valid: false, error: 'Cannot place bridge under enemy fire' };
     }

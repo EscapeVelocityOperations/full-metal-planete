@@ -10,13 +10,17 @@ import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext, type Act
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
 import { HelpPanel } from './ui/help-panel';
+import { getAudioManager, type AudioManager } from './audio';
 import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType, type HexTerrain } from '@/shared/game/types';
 import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainGetter, getOccupiedHexes } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
 import { canUnitEnterTerrain } from '@/shared/game/terrain';
 import { getFireableHexes, getSharedFireableHexes, isCombatUnit, canUnitFire, getHexCoverageInfo, type TerrainGetter, type HexCoverageInfo } from '@/shared/game/combat';
-import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, getMineralStats } from '@/shared/game/state';
+import { getTideForecast, getPlayerConverterCount, calculateTakeOffCost, canLiftOff, executeLiftOff, calculateAllScores, calculateScore, getWinners, setLiftOffDecision, getMineralStats } from '@/shared/game/state';
 import type { LiftOffDecisionAck, LiftOffDecisionsRevealed } from './game-client';
+import type { ReplayAction, ReplayData } from '@/shared/game/replay';
+import { createReplayData, describeAction } from '@/shared/game/replay';
+import { ReplayManager, ReplayControls } from './replay/index';
 
 export interface GameConfig {
   gameId: string;
@@ -32,6 +36,7 @@ export class GameApp {
   private input: InputHandler | null = null;
   private canvas: HTMLCanvasElement;
   private config: GameConfig;
+  private audio: AudioManager;
 
   private gameState: GameState | null = null;
   private selectedUnit: Unit | null = null;
@@ -61,13 +66,26 @@ export class GameApp {
   private turnStateSnapshots: GameState[] = [];
   private actionSequence: number = 0;
 
+  // Audio state tracking
+  private previousTide: TideLevel | null = null;
+
+  // Replay system state
+  private gameActionLog: ReplayAction[] = [];
+  private globalActionSequence: number = 0;
+  private initialGameState: GameState | null = null;
+  private replayManager: ReplayManager | null = null;
+  private replayControls: ReplayControls | null = null;
+  private isReplayMode: boolean = false;
+
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
     this.config = config;
     this.client = new GameClient(config.gameId, config.playerId, config.token);
     this.hud = new HUD();
+    this.audio = getAudioManager();
 
     this.setupEventHandlers();
+    this.setupAudioControls();
   }
 
   /**
@@ -75,6 +93,9 @@ export class GameApp {
    */
   async initialize(): Promise<void> {
     this.hud.showLoading();
+
+    // Initialize audio (will be fully activated on first user interaction)
+    await this.audio.initialize();
 
     // Initialize renderer using factory (defaults to CSS, falls back from WebGPU if needed)
     this.renderer = await createRenderer(this.canvas, this.rendererType);
@@ -328,6 +349,26 @@ export class GameApp {
   }
 
   /**
+   * Set up audio control handlers
+   */
+  private setupAudioControls(): void {
+    // Connect HUD audio controls to AudioManager
+    this.hud.onAudioMuteToggle(() => {
+      const muted = this.audio.toggleMute();
+      this.hud.updateAudioMuteState(muted);
+      this.audio.play('click');
+    });
+
+    this.hud.onAudioVolumeChange((volume: number) => {
+      this.audio.setMasterVolume(volume);
+    });
+
+    // Initialize HUD with current audio state
+    this.hud.updateAudioMuteState(this.audio.isMuted());
+    this.hud.updateAudioVolume(this.audio.getSettings().masterVolume);
+  }
+
+  /**
    * Fetch initial game status from server
    */
   private async fetchGameStatus(): Promise<void> {
@@ -575,6 +616,11 @@ export class GameApp {
     this.gameState = gameState;
     this.hud.enterGameMode();
 
+    // Capture initial state for replay
+    this.initialGameState = JSON.parse(JSON.stringify(gameState));
+    this.gameActionLog = [];
+    this.globalActionSequence = 0;
+
     // Set up player colors mapping for the renderer
     this.initializePlayerColors();
 
@@ -585,11 +631,17 @@ export class GameApp {
     this.hud.showActionHistory();
     this.clearTurnActionHistory();
 
+    // Set up replay callback
+    this.hud.onWatchReplay(() => this.enterReplayMode());
+
     this.updateGameState(gameState);
     this.hud.showScoreboard();
     this.hud.showMineralStats();
     this.hud.showTurnOrder();
     this.hud.showMessage('Game started!', 3000);
+
+    // Play game start sound
+    this.audio.play('success');
   }
 
   /**
@@ -652,6 +704,12 @@ export class GameApp {
     if (gameState.currentTide && this.renderer) {
       this.renderer.setTide(gameState.currentTide);
       this.hud.updateTide(gameState.currentTide);
+
+      // Play tide change sound if tide actually changed
+      if (this.previousTide !== null && this.previousTide !== gameState.currentTide) {
+        this.audio.play('tideChange');
+      }
+      this.previousTide = gameState.currentTide;
     }
 
     // Update tide forecast based on converter ownership
@@ -691,11 +749,8 @@ export class GameApp {
     this.checkMyTurn();
     this.updateLiftOffUI();
     this.updateScoreboard();
-<<<<<<< HEAD
     this.updateMineralStatsDisplay();
-=======
     this.updateUnderFireZones();
->>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
     this.render();
   }
 
@@ -978,6 +1033,8 @@ export class GameApp {
 
     this.client.sendAction(action);
     this.hud.showMessage('Landing astronef...', 2000);
+    // Play landing sound
+    this.audio.play('landing');
     // Server will send STATE_UPDATE with authoritative state
   }
 
@@ -1069,6 +1126,9 @@ export class GameApp {
     this.selectedUnit = unit;
     this.hud.showMessage(`Selected ${unit.type}`, 2000);
     console.log('Selected unit:', unit);
+
+    // Play unit selection sound
+    this.audio.play('unitSelect');
 
     // Show unit context panel for transporter units
     this.showUnitContextPanel(unit);
@@ -1163,6 +1223,8 @@ export class GameApp {
       this.selectedUnit = null;
       this.hud.hideUnitActions();
       this.hud.showMessage('Unit deselected', 1000);
+      // Play deselection sound
+      this.audio.play('unitDeselect');
       // Clear visual highlights
       this.renderer?.clearHighlights?.();
       this.renderer?.clearUnitSelections?.();
@@ -1215,7 +1277,6 @@ export class GameApp {
 
     // Record action for undo BEFORE applying optimistic update
     const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
-    this.recordAction('LOAD', `${unitTypeName} loaded mineral`, 1);
 
     // Send load action to server
     const action: LoadAction = {
@@ -1227,6 +1288,7 @@ export class GameApp {
       timestamp: Date.now(),
     };
 
+    this.recordAction('LOAD', `${unitTypeName} loaded mineral`, 1, action);
     this.client.sendAction(action);
 
     // Optimistic update
@@ -1242,6 +1304,9 @@ export class GameApp {
 
     this.gameState.actionPoints -= 1;
     this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Play load sound
+    this.audio.play('load');
 
     // Refresh unit context panel
     this.showUnitContextPanel(this.selectedUnit);
@@ -1262,7 +1327,6 @@ export class GameApp {
 
     // Record action for undo BEFORE applying optimistic update
     const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
-    this.recordAction('UNLOAD', `${unitTypeName} dropped cargo at (${destination.q},${destination.r})`, 1);
 
     // Send unload action to server
     const action: UnloadAction = {
@@ -1275,6 +1339,7 @@ export class GameApp {
       timestamp: Date.now(),
     };
 
+    this.recordAction('UNLOAD', `${unitTypeName} dropped cargo at (${destination.q},${destination.r})`, 1, action);
     this.client.sendAction(action);
 
     // Optimistic update - check if cargo is a mineral
@@ -1293,6 +1358,9 @@ export class GameApp {
 
     this.gameState.actionPoints -= 1;
     this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Play unload sound
+    this.audio.play('unload');
 
     // Refresh unit context panel
     this.showUnitContextPanel(this.selectedUnit);
@@ -1400,12 +1468,16 @@ export class GameApp {
     const pathInfo = stepsCount > 1 ? ` (${stepsCount} hexes)` : '';
     if (apCost > this.gameState.actionPoints) {
       this.hud.showMessage(`Need ${apCost} AP${pathInfo} (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+      this.audio.play('error');
     } else if (isDestKillzone) {
       this.hud.showMessage(`⚠️ KILLZONE! ${apCost} AP${pathInfo} - ${destCoverage!.count} enemies in range - Click to confirm`, 4000);
+      this.audio.play('click');
     } else if (isDestUnderFire) {
       this.hud.showMessage(`⚠️ Under fire! ${apCost} AP${pathInfo} - Enemy in range - Click to confirm`, 3500);
+      this.audio.play('click');
     } else {
       this.hud.showMessage(`Move for ${apCost} AP${pathInfo} - Click again to confirm`, 3000);
+      this.audio.play('click');
     }
   }
 
@@ -1450,7 +1522,7 @@ export class GameApp {
     // Record action for undo BEFORE applying optimistic update
     const unitTypeName = this.selectedUnit.type.charAt(0).toUpperCase() + this.selectedUnit.type.slice(1);
     const dest = this.movementPreviewDestination;
-    this.recordAction('MOVE', `Moved ${unitTypeName} to (${dest.q},${dest.r})`, apCost);
+    this.recordAction('MOVE', `Moved ${unitTypeName} to (${dest.q},${dest.r})`, apCost, action);
 
     this.client.sendAction(action);
 
@@ -1463,6 +1535,9 @@ export class GameApp {
     if (this.renderer?.setUnits) {
       this.renderer.setUnits(this.gameState.units);
     }
+
+    // Play movement sound
+    this.audio.play('moveComplete');
 
     this.hud.showMessage(`Moved for ${apCost} AP`, 1500);
     this.clearMovementPreview();
@@ -1559,7 +1634,7 @@ export class GameApp {
    * Record an action in the turn history and take a state snapshot for undo
    * Must be called BEFORE applying the action to game state
    */
-  private recordAction(type: string, description: string, apCost: number): void {
+  private recordAction(type: string, description: string, apCost: number, actionData?: any): void {
     if (!this.gameState) return;
 
     // Take a deep copy of current state for undo
@@ -1587,6 +1662,11 @@ export class GameApp {
     // Update HUD
     this.hud.addActionToHistory(entry);
     this.hud.setUndoEnabled(true);
+
+    // Log for replay if action data provided
+    if (actionData) {
+      this.logActionForReplay({ ...actionData, playerId }, description, apCost);
+    }
   }
 
   /**
@@ -1647,6 +1727,26 @@ export class GameApp {
   }
 
   /**
+   * Log action to the global game action log for replay
+   */
+  private logActionForReplay(action: any, description: string, apCost: number): void {
+    if (!this.gameState) return;
+
+    const replayAction: ReplayAction = {
+      seq: ++this.globalActionSequence,
+      type: action.type,
+      playerId: action.playerId || this.client['playerId'],
+      turn: this.gameState.turn,
+      timestamp: Date.now(),
+      data: JSON.parse(JSON.stringify(action)),
+      apCost,
+      description,
+    };
+
+    this.gameActionLog.push(replayAction);
+  }
+
+  /**
    * Record opponent action for display (no state snapshot needed)
    */
   private recordOpponentAction(action: any): void {
@@ -1698,6 +1798,9 @@ export class GameApp {
 
     this.turnActionHistory.push(entry);
     this.hud.addActionToHistory(entry);
+
+    // Also log for replay
+    this.logActionForReplay(action, description, apCost);
   }
 
   /**
@@ -1775,6 +1878,13 @@ export class GameApp {
       }
 
       this.updateGameState(this.gameState);
+
+      // Play turn sound if it's now our turn
+      if (nextPlayer === this.client['playerId']) {
+        this.audio.play('turnStart');
+      } else {
+        this.audio.play('turnEnd');
+      }
     }
   }
 
@@ -1824,6 +1934,7 @@ export class GameApp {
     if (!canLiftOff(this.gameState, playerId)) {
       const cost = calculateTakeOffCost(this.gameState, playerId);
       this.hud.showMessage(`Cannot lift off (need ${cost} AP)`, 2000);
+      this.audio.play('error');
       return;
     }
 
@@ -1837,6 +1948,9 @@ export class GameApp {
       decision: 'now',
       timestamp: Date.now(),
     });
+
+    // Play lift-off sound
+    this.audio.play('liftOff');
 
     this.hud.hideLiftOffButton();
     this.hud.showMessage('Astronef lifted off!', 3000);
@@ -1972,7 +2086,6 @@ export class GameApp {
   }
 
   /**
-<<<<<<< HEAD
    * Update the mineral statistics display
    */
   private updateMineralStatsDisplay(): void {
@@ -1980,13 +2093,13 @@ export class GameApp {
 
     const stats = getMineralStats(this.gameState);
 
-    // Build player colors and names maps
-    const playerColors: Record<string, string> = {};
+    // Build player names and colors maps
     const playerNames: Record<string, string> = {};
+    const playerColors: Record<string, string> = {};
     for (const player of this.gameState.players) {
-      playerColors[player.id] = player.color;
       const lobbyPlayer = this.lobbyPlayers.find(p => p.id === player.id);
-      playerNames[player.id] = lobbyPlayer?.name || player.name;
+      playerNames[player.id] = lobbyPlayer?.name || player.name || player.id;
+      playerColors[player.id] = player.color;
     }
 
     this.hud.updateMineralStats({
@@ -1997,7 +2110,9 @@ export class GameApp {
       playerColors,
       playerNames,
     });
-=======
+  }
+
+  /**
    * Check if a hex is under enemy fire and get coverage info
    */
   private getEnemyCoverageAtHex(coord: HexCoord): HexCoverageInfo | null {
@@ -2092,7 +2207,6 @@ export class GameApp {
 
     // Apply the visualization
     this.renderer.setUnderFireZones(aggregatedCoverage);
->>>>>>> 0c78e1c (Add under-fire zone visualization for enemy combat units)
   }
 
   private checkGameOver(): void {
@@ -2164,12 +2278,186 @@ export class GameApp {
     requestAnimationFrame(renderFrame);
   }
 
+  // ============================================================================
+  // Replay Mode
+  // ============================================================================
+
+  /**
+   * Create replay data from the current game
+   */
+  private createGameReplayData(): ReplayData | null {
+    if (!this.initialGameState || !this.gameState) return null;
+
+    const finalScores = calculateAllScores(this.gameState);
+    const winners = getWinners(this.gameState);
+
+    const players = this.lobbyPlayers.map(p => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+    }));
+
+    return createReplayData(
+      this.config.gameId,
+      this.initialGameState,
+      this.gameActionLog,
+      finalScores,
+      winners,
+      players
+    );
+  }
+
+  /**
+   * Enter replay mode
+   */
+  private enterReplayMode(): void {
+    if (this.isReplayMode) return;
+
+    const replayData = this.createGameReplayData();
+    if (!replayData) {
+      this.hud.showMessage('No replay data available', 2000);
+      return;
+    }
+
+    this.isReplayMode = true;
+
+    // Create replay manager
+    this.replayManager = new ReplayManager(replayData);
+
+    // Create replay controls
+    this.replayControls = new ReplayControls();
+    this.replayControls.setReplayData(replayData);
+    this.replayControls.show();
+
+    // Wire up controls
+    this.replayControls.on('play', () => this.replayManager?.play());
+    this.replayControls.on('pause', () => this.replayManager?.pause());
+    this.replayControls.on('stepForward', () => this.replayManager?.stepForward());
+    this.replayControls.on('stepBackward', () => this.replayManager?.stepBackward());
+    this.replayControls.on('previousTurn', () => this.replayManager?.previousTurn());
+    this.replayControls.on('nextTurn', () => this.replayManager?.nextTurn());
+    this.replayControls.on('seekToPercent', (percent) => this.replayManager?.seekToPercent(percent));
+    this.replayControls.on('setSpeed', (speed) => this.replayManager?.setSpeed(speed));
+    this.replayControls.on('export', () => this.replayControls?.exportReplay());
+    this.replayControls.on('close', () => this.exitReplayMode());
+
+    // Listen for replay manager events
+    this.replayManager.on('playbackStateChange', (state) => {
+      this.replayControls?.updatePlaybackState(state);
+    });
+
+    this.replayManager.on('stateUpdate', (state) => {
+      this.updateRendererFromReplayState(state);
+    });
+
+    this.replayManager.on('turnChange', (_turn, _playerId, marker) => {
+      this.replayControls?.updateTurnMarker(marker);
+    });
+
+    this.replayManager.on('replayComplete', () => {
+      this.hud.showMessage('Replay complete', 2000);
+    });
+
+    // Show initial state
+    const initialState = this.replayManager.getPlaybackState();
+    this.replayControls.updatePlaybackState(initialState);
+    if (initialState.gameState) {
+      this.updateRendererFromReplayState(initialState.gameState);
+    }
+
+    // Hide game controls during replay
+    this.hud.hideActionHistory();
+
+    // Add replay mode banner
+    this.showReplayBanner();
+
+    this.hud.showMessage('Replay mode - use controls to navigate', 3000);
+  }
+
+  /**
+   * Exit replay mode
+   */
+  private exitReplayMode(): void {
+    if (!this.isReplayMode) return;
+
+    this.isReplayMode = false;
+
+    // Clean up replay components
+    if (this.replayManager) {
+      this.replayManager.destroy();
+      this.replayManager = null;
+    }
+
+    if (this.replayControls) {
+      this.replayControls.destroy();
+      this.replayControls = null;
+    }
+
+    // Restore current game state
+    if (this.gameState) {
+      if (this.renderer?.setUnits) {
+        this.renderer.setUnits(this.gameState.units);
+      }
+      if (this.renderer?.setMinerals) {
+        this.renderer.setMinerals(this.gameState.minerals);
+      }
+    }
+
+    // Restore game controls
+    this.hud.showActionHistory();
+
+    // Remove replay mode banner
+    this.hideReplayBanner();
+
+    this.hud.showMessage('Exited replay mode', 2000);
+  }
+
+  /**
+   * Update renderer from replay state
+   */
+  private updateRendererFromReplayState(state: GameState): void {
+    if (this.renderer?.setUnits) {
+      this.renderer.setUnits(state.units);
+    }
+    if (this.renderer?.setMinerals) {
+      this.renderer.setMinerals(state.minerals);
+    }
+    // Update HUD elements
+    this.updateGameState(state);
+  }
+
+  /**
+   * Show replay mode banner
+   */
+  private showReplayBanner(): void {
+    let banner = document.getElementById('replay-mode-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'replay-mode-banner';
+      banner.className = 'replay-mode-banner';
+      banner.textContent = '📺 REPLAY MODE - Press ESC to exit';
+      document.body.appendChild(banner);
+    }
+    banner.classList.add('visible');
+  }
+
+  /**
+   * Hide replay mode banner
+   */
+  private hideReplayBanner(): void {
+    const banner = document.getElementById('replay-mode-banner');
+    if (banner) {
+      banner.classList.remove('visible');
+    }
+  }
+
   /**
    * Clean up resources
    */
   destroy(): void {
     this.hud.destroy();
     this.client.disconnect();
+    this.audio.destroy();
 
     if (this.input) {
       this.input.destroy();
@@ -2185,6 +2473,14 @@ export class GameApp {
 
     if (this.helpPanel) {
       this.helpPanel.destroy();
+    }
+
+    if (this.replayManager) {
+      this.replayManager.destroy();
+    }
+
+    if (this.replayControls) {
+      this.replayControls.destroy();
     }
   }
 }

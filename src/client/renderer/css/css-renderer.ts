@@ -481,13 +481,6 @@ export class CSSHexRenderer {
         pointer-events: none;
       }
 
-      ${enableAnimations ? `
-      @keyframes pulse-danger {
-        0%, 100% { box-shadow: inset 0 0 0 3px rgba(255, 80, 80, 0.9); }
-        50% { box-shadow: inset 0 0 0 4px rgba(255, 80, 80, 0.6); }
-      }
-      ` : ''}
-
       /* Hex coverage tooltip */
       .hex-cell[data-coverage-count]::after {
         content: attr(data-coverage-count);
@@ -515,6 +508,11 @@ export class CSSHexRenderer {
       }
 
       ${enableAnimations ? `
+      @keyframes pulse-danger {
+        0%, 100% { box-shadow: inset 0 0 0 3px rgba(255, 80, 80, 0.9); }
+        50% { box-shadow: inset 0 0 0 4px rgba(255, 80, 80, 0.6); }
+      }
+
       @keyframes pulse-target {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.6; }

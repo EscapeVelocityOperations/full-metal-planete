@@ -95,6 +95,12 @@ export class HUD {
   private turnOrderPanel: HTMLElement;
   private turnOrderContent: HTMLElement;
 
+  // Audio controls
+  private audioMuteBtn: HTMLButtonElement | null = null;
+  private audioVolumeSlider: HTMLInputElement | null = null;
+  private audioMuteCallback: (() => void) | null = null;
+  private audioVolumeCallback: ((volume: number) => void) | null = null;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -484,6 +490,7 @@ export class HUD {
   private liftOffActionCallback: (() => void) | null = null;
   private liftOffModal: HTMLElement | null = null;
   private liftOffBtn: HTMLButtonElement | null = null;
+  private watchReplayCallback: (() => void) | null = null;
 
   /**
    * Show the lift-off decision modal (Turn 21)
@@ -904,15 +911,32 @@ export class HUD {
           Scoring: 2 pts/mineral, 1 pt/equipment, 1 pt/intact turret<br>
           (Only counts if Astronef lifted off successfully)
         </p>
-        <button id="game-over-close-btn" class="btn btn-primary">Close</button>
+        <div class="game-over-buttons">
+          <button id="watch-replay-btn" class="btn btn-secondary">📺 Watch Replay</button>
+          <button id="game-over-close-btn" class="btn btn-primary">Close</button>
+        </div>
       </div>
     `;
 
     this.liftOffModal.style.display = 'flex';
 
+    document.getElementById('watch-replay-btn')?.addEventListener('click', () => {
+      this.liftOffModal!.style.display = 'none';
+      if (this.watchReplayCallback) {
+        this.watchReplayCallback();
+      }
+    });
+
     document.getElementById('game-over-close-btn')?.addEventListener('click', () => {
       this.liftOffModal!.style.display = 'none';
     });
+  }
+
+  /**
+   * Set callback for when user wants to watch replay
+   */
+  onWatchReplay(callback: () => void): void {
+    this.watchReplayCallback = callback;
   }
 
   // ============================================================================
@@ -1542,6 +1566,95 @@ export class HUD {
     }
     if (this.undoBtn) {
       this.undoBtn.disabled = true;
+    }
+  }
+
+  // ============================================================================
+  // Audio Controls
+  // ============================================================================
+
+  /**
+   * Set up audio control elements (called when game section is shown)
+   */
+  private initializeAudioControls(): void {
+    // Create audio control container if it doesn't exist
+    let audioControls = document.getElementById('audio-controls');
+    if (!audioControls) {
+      audioControls = document.createElement('div');
+      audioControls.id = 'audio-controls';
+      audioControls.className = 'audio-controls';
+      audioControls.innerHTML = `
+        <button id="audio-mute-btn" class="btn btn-audio" title="Toggle sound">
+          🔊
+        </button>
+        <input type="range" id="audio-volume-slider" class="audio-volume-slider"
+               min="0" max="100" value="50" title="Volume">
+      `;
+
+      // Add to game section (near zoom controls)
+      const gameSection = document.getElementById('game-section');
+      if (gameSection) {
+        gameSection.appendChild(audioControls);
+      }
+    }
+
+    this.audioMuteBtn = document.getElementById('audio-mute-btn') as HTMLButtonElement;
+    this.audioVolumeSlider = document.getElementById('audio-volume-slider') as HTMLInputElement;
+
+    // Set up event listeners
+    this.audioMuteBtn?.addEventListener('click', () => {
+      if (this.audioMuteCallback) {
+        this.audioMuteCallback();
+      }
+    });
+
+    this.audioVolumeSlider?.addEventListener('input', () => {
+      if (this.audioVolumeCallback && this.audioVolumeSlider) {
+        const volume = parseInt(this.audioVolumeSlider.value, 10) / 100;
+        this.audioVolumeCallback(volume);
+      }
+    });
+  }
+
+  /**
+   * Set audio mute toggle callback
+   */
+  onAudioMuteToggle(callback: () => void): void {
+    this.audioMuteCallback = callback;
+    // Initialize controls if not already done
+    if (!this.audioMuteBtn) {
+      this.initializeAudioControls();
+    }
+  }
+
+  /**
+   * Set audio volume change callback
+   */
+  onAudioVolumeChange(callback: (volume: number) => void): void {
+    this.audioVolumeCallback = callback;
+    // Initialize controls if not already done
+    if (!this.audioVolumeSlider) {
+      this.initializeAudioControls();
+    }
+  }
+
+  /**
+   * Update the mute button display state
+   */
+  updateAudioMuteState(muted: boolean): void {
+    if (this.audioMuteBtn) {
+      this.audioMuteBtn.textContent = muted ? '🔇' : '🔊';
+      this.audioMuteBtn.classList.toggle('muted', muted);
+      this.audioMuteBtn.title = muted ? 'Unmute sound' : 'Mute sound';
+    }
+  }
+
+  /**
+   * Update the volume slider display
+   */
+  updateAudioVolume(volume: number): void {
+    if (this.audioVolumeSlider) {
+      this.audioVolumeSlider.value = String(Math.round(volume * 100));
     }
   }
 
