@@ -40,9 +40,13 @@ export interface IHexRenderer {
   // Hex highlighting for combat/movement visualization
   setHighlightedHexes?(
     hexes: Array<{ q: number; r: number }>,
-    type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire'
+    type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire' | 'underfire-1' | 'underfire-2'
   ): void;
   clearHighlights?(): void;
+
+  // Under-fire zone visualization
+  setUnderFireZones?(coverageMap: Map<string, { count: number; sourceUnits: string[] }>): void;
+  clearUnderFireZones?(): void;
 
   // Unit selection highlighting
   setUnitSelected?(unitId: string, selected: boolean): void;

@@ -380,6 +380,71 @@ export class CSSHexRenderer {
         pointer-events: none;
       }
 
+      /* Under fire zones - enemy coverage visualization */
+      /* Single enemy unit coverage (yellow/caution) */
+      .hex-cell.highlight-underfire-1 {
+        box-shadow: inset 0 0 0 2px rgba(255, 200, 50, 0.7);
+      }
+
+      .hex-cell.highlight-underfire-1::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 200, 50, 0.15);
+        pointer-events: none;
+      }
+
+      /* Multiple enemy unit coverage / killzone (red/danger) */
+      .hex-cell.highlight-underfire-2 {
+        box-shadow: inset 0 0 0 3px rgba(255, 80, 80, 0.9);
+        animation: pulse-danger 1.5s ease-in-out infinite;
+      }
+
+      .hex-cell.highlight-underfire-2::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 80, 80, 0.25);
+        pointer-events: none;
+      }
+
+      @keyframes pulse-danger {
+        0%, 100% { box-shadow: inset 0 0 0 3px rgba(255, 80, 80, 0.9); }
+        50% { box-shadow: inset 0 0 0 4px rgba(255, 80, 80, 0.6); }
+      }
+
+      /* Hex coverage tooltip */
+      .hex-cell[data-coverage-count]::after {
+        content: attr(data-coverage-count);
+        position: absolute;
+        top: 4px;
+        right: 8px;
+        font-size: 11px;
+        font-weight: bold;
+        color: #fff;
+        background: rgba(255, 80, 80, 0.85);
+        border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        pointer-events: none;
+        z-index: 15;
+      }
+
+      .hex-cell.highlight-underfire-1::after {
+        background: rgba(255, 200, 50, 0.9);
+        color: #333;
+      }
+
       @keyframes pulse-target {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.6; }
@@ -1129,11 +1194,11 @@ export class CSSHexRenderer {
   /**
    * Set highlighted hexes with a specific type
    * @param hexes - Array of hex coordinates to highlight
-   * @param type - Type of highlight (range, target, selected, danger, crossfire)
+   * @param type - Type of highlight (range, target, selected, danger, crossfire, underfire-1, underfire-2)
    */
   setHighlightedHexes(
     hexes: Array<{ q: number; r: number }>,
-    type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire'
+    type: 'range' | 'target' | 'selected' | 'danger' | 'crossfire' | 'underfire-1' | 'underfire-2'
   ): void {
     const className = `highlight-${type}`;
 
@@ -1147,15 +1212,60 @@ export class CSSHexRenderer {
   }
 
   /**
+   * Set under-fire zone visualization for enemy coverage
+   * @param coverageMap - Map of hex keys to coverage info
+   */
+  setUnderFireZones(coverageMap: Map<string, { count: number; sourceUnits: string[] }>): void {
+    for (const [hexKey, info] of coverageMap) {
+      const [q, r] = hexKey.split(',').map(Number);
+      const element = this.hexElements.get(`${q},${r}`);
+      if (element) {
+        // Store source unit IDs for tooltip
+        element.dataset.coveringSources = info.sourceUnits.join(',');
+        element.dataset.coverageCount = String(info.count);
+
+        // Apply appropriate highlight based on coverage count
+        if (info.count >= 2) {
+          element.classList.add('highlight-underfire-2');
+        } else if (info.count === 1) {
+          element.classList.add('highlight-underfire-1');
+        }
+      }
+    }
+  }
+
+  /**
+   * Clear under-fire zone visualization
+   */
+  clearUnderFireZones(): void {
+    for (const element of this.hexElements.values()) {
+      element.classList.remove('highlight-underfire-1', 'highlight-underfire-2');
+      delete element.dataset.coveringSources;
+      delete element.dataset.coverageCount;
+    }
+  }
+
+  /**
    * Clear all hex highlights
    */
   clearHighlights(): void {
-    const highlightClasses = ['highlight-range', 'highlight-target', 'highlight-selected', 'highlight-danger', 'highlight-crossfire'];
+    const highlightClasses = [
+      'highlight-range',
+      'highlight-target',
+      'highlight-selected',
+      'highlight-danger',
+      'highlight-crossfire',
+      'highlight-underfire-1',
+      'highlight-underfire-2'
+    ];
 
     for (const element of this.hexElements.values()) {
       for (const cls of highlightClasses) {
         element.classList.remove(cls);
       }
+      // Also clear coverage data
+      delete element.dataset.coveringSources;
+      delete element.dataset.coverageCount;
     }
   }
 

@@ -87,15 +87,23 @@ export function canShootTarget(
 export type TerrainGetter = (coord: HexCoord) => TerrainType;
 
 /**
- * Get all hexes that are under fire from a player's combat units.
- * A hex is "under fire" when it's within range of 2+ combat units of the same player.
+ * Coverage info for a hex under enemy fire.
  */
-export function getHexesUnderFire(
+export interface HexCoverageInfo {
+  count: number;           // Number of units covering this hex
+  sourceUnits: string[];   // IDs of units covering this hex
+}
+
+/**
+ * Get coverage counts and source units for all hexes covered by a player's combat units.
+ * Returns info for ALL covered hexes (even with just 1 unit coverage).
+ */
+export function getHexCoverageInfo(
   units: Unit[],
   playerId: string,
   getTerrainAt: TerrainGetter
-): Set<string> {
-  const underFire = new Set<string>();
+): Map<string, HexCoverageInfo> {
+  const coverage = new Map<string, HexCoverageInfo>();
 
   // Get all active combat units for this player
   const combatUnits = units.filter(
@@ -106,14 +114,6 @@ export function getHexesUnderFire(
       !u.isNeutralized &&
       u.shotsRemaining > 0
   );
-
-  // Need at least 2 combat units to create an under-fire zone
-  if (combatUnits.length < 2) {
-    return underFire;
-  }
-
-  // Count coverage for each hex
-  const coverage = new Map<string, number>();
 
   for (const unit of combatUnits) {
     const terrain = getTerrainAt(unit.position);
@@ -127,13 +127,34 @@ export function getHexesUnderFire(
       }
 
       const key = hexKey(hex);
-      coverage.set(key, (coverage.get(key) || 0) + 1);
+      const existing = coverage.get(key);
+      if (existing) {
+        existing.count++;
+        existing.sourceUnits.push(unit.id);
+      } else {
+        coverage.set(key, { count: 1, sourceUnits: [unit.id] });
+      }
     }
   }
 
+  return coverage;
+}
+
+/**
+ * Get all hexes that are under fire from a player's combat units.
+ * A hex is "under fire" when it's within range of 2+ combat units of the same player.
+ */
+export function getHexesUnderFire(
+  units: Unit[],
+  playerId: string,
+  getTerrainAt: TerrainGetter
+): Set<string> {
+  const underFire = new Set<string>();
+  const coverage = getHexCoverageInfo(units, playerId, getTerrainAt);
+
   // Mark hexes covered by 2+ units as under fire
-  for (const [key, count] of coverage) {
-    if (count >= GAME_CONSTANTS.UNITS_REQUIRED_TO_DESTROY) {
+  for (const [key, info] of coverage) {
+    if (info.count >= GAME_CONSTANTS.UNITS_REQUIRED_TO_DESTROY) {
       underFire.add(key);
     }
   }
