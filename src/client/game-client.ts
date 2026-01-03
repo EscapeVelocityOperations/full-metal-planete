@@ -14,8 +14,11 @@ export interface WSMessage {
 export interface GameClientEvents {
   connected: () => void;
   disconnected: () => void;
+  reconnected: (data: { gameState: GameState; players: any[]; roomState: string }) => void;
   playerJoined: (player: any) => void;
   playerLeft: (playerId: string) => void;
+  playerReconnected: (data: { playerId: string; player: any }) => void;
+  playerDisconnected: (playerId: string) => void;
   playerReady: (playerId: string) => void;
   gameStart: (gameState: GameState) => void;
   action: (action: GameAction) => void;
@@ -105,6 +108,19 @@ export class GameClient {
           this.emit('playerLeft', message.payload.playerId);
           break;
 
+        case 'PLAYER_RECONNECTED':
+          this.emit('playerReconnected', message.payload);
+          break;
+
+        case 'PLAYER_DISCONNECTED':
+          this.emit('playerDisconnected', message.payload.playerId);
+          break;
+
+        case 'RECONNECT':
+          // We've reconnected - receive full game state
+          this.emit('reconnected', message.payload);
+          break;
+
         case 'PLAYER_READY':
           this.emit('playerReady', message.payload.playerId);
           break;
@@ -184,6 +200,17 @@ export class GameClient {
   private sendPong(): void {
     this.send({
       type: 'PONG',
+      payload: {},
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Request full state sync from server (useful after reconnection)
+   */
+  requestStateSync(): void {
+    this.send({
+      type: 'SYNC_REQUEST',
       payload: {},
       timestamp: Date.now(),
     });

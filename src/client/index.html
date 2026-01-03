@@ -686,6 +686,25 @@
         margin-left: 4px;
       }
 
+      /* Disconnected player styles */
+      .scoreboard-table tr.disconnected td {
+        opacity: 0.5;
+      }
+
+      .disconnected-icon {
+        margin-right: 4px;
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      .player-badge.disconnected {
+        opacity: 0.5;
+        text-decoration: line-through;
+      }
+
+      .player-badge.disconnected::after {
+        content: ' ⚠️';
+      }
+
       /* Unit Context Panel (Mineral Pickup/Drop) */
       .unit-context-panel {
         position: absolute;

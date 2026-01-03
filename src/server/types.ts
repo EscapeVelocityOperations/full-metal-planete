@@ -19,6 +19,8 @@ export type WSMessageType =
   | 'PLAYER_JOINED'
   | 'PLAYER_LEFT'
   | 'PLAYER_READY'
+  | 'PLAYER_RECONNECTED'
+  | 'PLAYER_DISCONNECTED'
   | 'GAME_START'
   | 'ACTION'
   | 'STATE_UPDATE'
@@ -29,7 +31,8 @@ export type WSMessageType =
   | 'PONG'
   | 'READY'
   | 'END_TURN'
-  | 'RECONNECT';
+  | 'RECONNECT'
+  | 'SYNC_REQUEST';
 
 // Action types from game
 export type ActionType =

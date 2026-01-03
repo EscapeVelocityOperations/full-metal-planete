@@ -30,24 +30,56 @@ export class WebSocketHandler {
   }
 
   /**
-   * Handle new WebSocket connection
+   * Handle new WebSocket connection (or reconnection)
    */
   handleConnection(ws: WebSocket, room: Room, playerId: string): void {
     if (!this.connections.has(room.id)) {
       this.connections.set(room.id, new Map());
     }
 
+    const player = room.getPlayer(playerId);
+    const wasConnected = player?.isConnected;
+    const isReconnection = player && !wasConnected && room.state !== 'waiting';
+
+    // Close any existing connection for this player (stale connection cleanup)
+    const existingWs = this.connections.get(room.id)?.get(playerId);
+    if (existingWs && existingWs !== ws && existingWs.readyState === 1) {
+      existingWs.close();
+    }
+
     this.connections.get(room.id)!.set(playerId, ws);
     room.setPlayerConnected(playerId, true);
     room.updatePlayerLastSeen(playerId, new Date());
 
-    // Notify other players
-    this.broadcast(room.id, {
-      type: 'PLAYER_JOINED',
-      payload: { player: room.getPlayer(playerId) },
-      timestamp: Date.now(),
-      playerId,
-    }, [playerId]);
+    if (isReconnection) {
+      // Send full game state to reconnecting player
+      this.sendToPlayer(room.id, playerId, {
+        type: 'RECONNECT',
+        payload: {
+          gameState: room.gameState,
+          players: room.players,
+          roomState: room.state,
+        },
+        timestamp: Date.now(),
+      });
+
+      // Notify other players of reconnection
+      this.broadcast(room.id, {
+        type: 'PLAYER_RECONNECTED',
+        payload: { playerId, player: room.getPlayer(playerId) },
+        timestamp: Date.now(),
+      }, [playerId]);
+
+      console.log(`Player ${playerId} reconnected to game ${room.id}`);
+    } else {
+      // New connection - notify other players
+      this.broadcast(room.id, {
+        type: 'PLAYER_JOINED',
+        payload: { player: room.getPlayer(playerId) },
+        timestamp: Date.now(),
+        playerId,
+      }, [playerId]);
+    }
 
     ws.on('message', (data: Buffer) => {
       this.handleMessage(room, playerId, data.toString());
@@ -140,6 +172,19 @@ export class WebSocketHandler {
           // Just update last seen
           break;
 
+        case 'SYNC_REQUEST':
+          // Client is requesting full game state sync (e.g., after reconnection)
+          this.sendToPlayer(room.id, playerId, {
+            type: 'STATE_UPDATE',
+            payload: {
+              gameState: room.gameState,
+              players: room.players,
+              roomState: room.state,
+            },
+            timestamp: Date.now(),
+          });
+          break;
+
         default:
           console.warn(`Unknown message type: ${message.type}`);
       }
@@ -162,11 +207,22 @@ export class WebSocketHandler {
       }
     }
 
-    this.broadcast(room.id, {
-      type: 'PLAYER_LEFT',
-      payload: { playerId },
-      timestamp: Date.now(),
-    });
+    // During gameplay, send PLAYER_DISCONNECTED (they might reconnect)
+    // In waiting/ready state, send PLAYER_LEFT (they've truly left)
+    if (room.state === 'playing') {
+      this.broadcast(room.id, {
+        type: 'PLAYER_DISCONNECTED',
+        payload: { playerId },
+        timestamp: Date.now(),
+      });
+      console.log(`Player ${playerId} disconnected from game ${room.id}`);
+    } else {
+      this.broadcast(room.id, {
+        type: 'PLAYER_LEFT',
+        payload: { playerId },
+        timestamp: Date.now(),
+      });
+    }
   }
 
   /**

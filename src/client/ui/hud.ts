@@ -9,6 +9,7 @@ export interface LobbyPlayer {
   name: string;
   color: string;
   isReady: boolean;
+  isConnected?: boolean;
 }
 
 export interface PhaseInfo {
@@ -300,6 +301,9 @@ export class HUD {
       badge.className = `player-badge ${player.color}`;
       if (player.isReady) {
         badge.classList.add('ready');
+      }
+      if (player.isConnected === false) {
+        badge.classList.add('disconnected');
       }
       badge.textContent = player.name;
       this.playerListEl.appendChild(badge);
@@ -805,6 +809,7 @@ export class HUD {
       cargoCount: number;
       score: number;
       hasLiftedOff: boolean;
+      isConnected?: boolean;
     }>,
     currentPlayerId: string
   ): void {
@@ -821,12 +826,19 @@ export class HUD {
       if (player.hasLiftedOff) {
         row.classList.add('lifted-off');
       }
+      if (player.isConnected === false) {
+        row.classList.add('disconnected');
+      }
+
+      const disconnectedIcon = player.isConnected === false ? '<span class="disconnected-icon" title="Disconnected">⚠️</span>' : '';
+      const liftoffIcon = player.hasLiftedOff ? '<span class="liftoff-icon">🚀</span>' : '';
 
       row.innerHTML = `
         <td>
           <span class="player-color-dot" style="background-color: ${this.getPlayerColorHex(player.color)}"></span>
+          ${disconnectedIcon}
           ${player.name}
-          ${player.hasLiftedOff ? '<span class="liftoff-icon">🚀</span>' : ''}
+          ${liftoffIcon}
         </td>
         <td>${player.unitCount}</td>
         <td>${player.cargoCount}</td>

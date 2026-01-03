@@ -107,7 +107,22 @@ export class GameApp {
 
     this.client.on('disconnected', () => {
       console.log('Game client disconnected');
-      this.hud.showMessage('Disconnected from server', 5000);
+      this.hud.showMessage('Disconnected - attempting to reconnect...', 5000);
+    });
+
+    this.client.on('reconnected', (data: { gameState: GameState; players: any[]; roomState: string }) => {
+      console.log('Reconnected to game', data);
+      this.handleReconnected(data);
+    });
+
+    this.client.on('playerReconnected', (data: { playerId: string; player: any }) => {
+      console.log('Player reconnected:', data);
+      this.handlePlayerReconnected(data);
+    });
+
+    this.client.on('playerDisconnected', (playerId: string) => {
+      console.log('Player disconnected:', playerId);
+      this.handlePlayerDisconnected(playerId);
     });
 
     this.client.on('playerJoined', (player: any) => {
@@ -423,6 +438,89 @@ export class GameApp {
 
     if (player) {
       this.hud.showMessage(`${player.name} left`, 2000);
+    }
+  }
+
+  /**
+   * Handle reconnection to game (this client reconnected)
+   */
+  private handleReconnected(data: { gameState: GameState; players: any[]; roomState: string }): void {
+    // Update lobby players with connection status
+    this.lobbyPlayers = data.players.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      isReady: p.isReady || false,
+      isConnected: p.isConnected ?? true,
+    }));
+
+    if (data.roomState === 'playing' && data.gameState) {
+      // Restore game state
+      this.isInLobby = false;
+      this.gameState = data.gameState;
+
+      // Make sure we're in game mode
+      if (this.hud.isLobbyMode()) {
+        this.hud.enterGameMode();
+        this.initializePlayerColors();
+        this.initializeDeploymentInventory();
+        this.hud.showScoreboard();
+      }
+
+      this.updateGameState(data.gameState);
+      this.hud.showMessage('Reconnected to game!', 3000);
+    } else {
+      // Still in lobby
+      this.hud.updatePlayerList(this.lobbyPlayers);
+      this.hud.showMessage('Reconnected to lobby!', 2000);
+    }
+  }
+
+  /**
+   * Handle another player reconnecting
+   */
+  private handlePlayerReconnected(data: { playerId: string; player: any }): void {
+    const existingIndex = this.lobbyPlayers.findIndex(p => p.id === data.playerId);
+    const lobbyPlayer: LobbyPlayer = {
+      id: data.player.id,
+      name: data.player.name,
+      color: data.player.color,
+      isReady: data.player.isReady || false,
+    };
+
+    if (existingIndex >= 0) {
+      this.lobbyPlayers[existingIndex] = lobbyPlayer;
+    } else {
+      this.lobbyPlayers.push(lobbyPlayer);
+    }
+
+    this.hud.updatePlayerList(this.lobbyPlayers);
+
+    // Update connection status in scoreboard if in game
+    if (this.gameState) {
+      const player = this.gameState.players.find(p => p.id === data.playerId);
+      if (player) {
+        player.isConnected = true;
+      }
+      this.updateScoreboard();
+    }
+
+    this.hud.showMessage(`${data.player.name} reconnected!`, 2000);
+  }
+
+  /**
+   * Handle another player disconnecting (during game)
+   */
+  private handlePlayerDisconnected(playerId: string): void {
+    // Update connection status in game state
+    if (this.gameState) {
+      const player = this.gameState.players.find(p => p.id === playerId);
+      if (player) {
+        player.isConnected = false;
+        const lobbyPlayer = this.lobbyPlayers.find(p => p.id === playerId);
+        this.hud.showMessage(`${lobbyPlayer?.name || 'A player'} disconnected`, 3000);
+        this.updateScoreboard();
+      }
     }
   }
 
@@ -1586,6 +1684,7 @@ export class GameApp {
         cargoCount,
         score,
         hasLiftedOff: player.hasLiftedOff || false,
+        isConnected: player.isConnected ?? true,
       };
     });
 
