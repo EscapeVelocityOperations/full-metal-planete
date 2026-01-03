@@ -10,6 +10,10 @@ import {
   validateCaptureAction,
   validateBuildAction,
   calculateSavedAP,
+  validatePlaceBridgeAction,
+  validatePickupBridgeAction,
+  validateBridgeConnections,
+  hasBridgeAt,
 } from '../actions';
 import {
   TerrainType,
@@ -24,6 +28,9 @@ import {
   type HexTerrain,
   type Player,
   type Mineral,
+  type BridgePlacement,
+  type PlaceBridgeAction,
+  type PickupBridgeAction,
 } from '../types';
 
 // Helper to create minimal unit for testing
@@ -1534,6 +1541,548 @@ describe('Action Edge Cases', () => {
       const result = validateCaptureAction(state, ['tank-1', 'tank-2'], 'nonexistent');
       expect(result.valid).toBe(false);
       expect(result.error).toContain('not found');
+    });
+  });
+});
+
+// ============================================================================
+// Bridge Actions (Section 9)
+// ============================================================================
+
+describe('Bridge Actions', () => {
+  // Helper to create a bridge placement
+  function createBridge(id: string, position: HexCoord, placedBy: string): BridgePlacement {
+    return { id, position, placedBy };
+  }
+
+  // Helper to create PlaceBridgeAction
+  function createPlaceBridgeAction(bridgeId: string, position: HexCoord): PlaceBridgeAction {
+    return {
+      type: 'PLACE_BRIDGE',
+      playerId: 'p1',
+      timestamp: Date.now(),
+      bridgeId,
+      position,
+      apCost: 1,
+    };
+  }
+
+  // Helper to create PickupBridgeAction
+  function createPickupBridgeAction(bridgeId: string, transporterId: string): PickupBridgeAction {
+    return {
+      type: 'PICKUP_BRIDGE',
+      playerId: 'p1',
+      timestamp: Date.now(),
+      bridgeId,
+      transporterId,
+      apCost: 1,
+    };
+  }
+
+  describe('validatePlaceBridgeAction', () => {
+    it('should allow placing a bridge on sea adjacent to land', () => {
+      const transporter = createUnit('transporter', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-1'],
+      });
+      const bridge = createUnit('bridge-1', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        actionPoints: 5,
+      });
+
+      const action = createPlaceBridgeAction('bridge-1', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(true);
+      expect(result.apCost).toBe(1);
+    });
+
+    it('should allow placing a bridge adjacent to another bridge', () => {
+      const transporter = createUnit('transporter', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-2'],
+      });
+      const bridge = createUnit('bridge-2', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: -1, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 0, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const existingBridge = createBridge('bridge-1', { q: 0, r: 0 }, 'p1');
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        bridges: [existingBridge],
+        actionPoints: 5,
+      });
+
+      // Move transporter to the existing bridge (which counts as land)
+      transporter.position = { q: 0, r: 0 };
+
+      const action = createPlaceBridgeAction('bridge-2', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(true);
+    });
+
+    it('should reject placing bridge on land', () => {
+      const transporter = createUnit('transporter', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-1'],
+      });
+      const bridge = createUnit('bridge-1', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Land },
+      ];
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        actionPoints: 5,
+      });
+
+      const action = createPlaceBridgeAction('bridge-1', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('sea terrain');
+    });
+
+    it('should reject placing bridge not connected to land or bridge', () => {
+      const transporter = createUnit('transporter', UnitType.MotorBoat, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-1'],
+      });
+      const bridge = createUnit('bridge-1', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 0, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: -1 }, type: TerrainType.Sea },
+        { coord: { q: 0, r: -1 }, type: TerrainType.Sea },
+        { coord: { q: -1, r: 1 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        actionPoints: 5,
+      });
+
+      const action = createPlaceBridgeAction('bridge-1', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('connect to land');
+    });
+
+    it('should reject placing bridge by stuck transporter', () => {
+      const transporter = createUnit('transporter', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-1'],
+        isStuck: true,
+      });
+      const bridge = createUnit('bridge-1', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        actionPoints: 5,
+      });
+
+      const action = createPlaceBridgeAction('bridge-1', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('stuck');
+    });
+
+    it('should reject placing bridge with insufficient AP', () => {
+      const transporter = createUnit('transporter', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-1'],
+      });
+      const bridge = createUnit('bridge-1', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        actionPoints: 0,
+      });
+
+      const action = createPlaceBridgeAction('bridge-1', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('action points');
+    });
+
+    it('should reject placing bridge where one already exists', () => {
+      const transporter = createUnit('transporter', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: ['bridge-2'],
+      });
+      const bridge = createUnit('bridge-2', UnitType.Bridge, 'p1', null as any, {});
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const existingBridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const state = createGameState({
+        units: [transporter, bridge],
+        terrain,
+        bridges: [existingBridge],
+        actionPoints: 5,
+      });
+
+      const action = createPlaceBridgeAction('bridge-2', { q: 1, r: 0 });
+      const result = validatePlaceBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('already exists');
+    });
+  });
+
+  describe('validatePickupBridgeAction', () => {
+    it('should allow picking up a bridge with adjacent transporter', () => {
+      // Crab has cargoSlots: 2 and can carry cargo
+      const transporter = createUnit('transporter', UnitType.Crab, 'p1', { q: 0, r: 0 }, {
+        cargo: [],
+      });
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 5,
+      });
+
+      const action = createPickupBridgeAction('bridge-1', 'transporter');
+      const result = validatePickupBridgeAction(state, action);
+
+      expect(result.valid).toBe(true);
+      expect(result.apCost).toBe(1);
+    });
+
+    it('should reject picking up non-adjacent bridge', () => {
+      // Crab has cargoSlots: 2 and can carry cargo
+      const transporter = createUnit('transporter', UnitType.Crab, 'p1', { q: 0, r: 0 }, {
+        cargo: [],
+      });
+      const bridge = createBridge('bridge-1', { q: 2, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 5,
+      });
+
+      const action = createPickupBridgeAction('bridge-1', 'transporter');
+      const result = validatePickupBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('adjacent');
+    });
+
+    it('should reject picking up by unit with full cargo', () => {
+      // Crab has cargoSlots: 2, fill it up
+      const crab = createUnit('crab-1', UnitType.Crab, 'p1', { q: 0, r: 0 }, {
+        cargo: ['unit-1', 'unit-2'], // Crab can carry 2, now full
+      });
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [crab],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 5,
+      });
+
+      const action = createPickupBridgeAction('bridge-1', 'crab-1');
+      const result = validatePickupBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('cargo space');
+    });
+
+    it('should reject picking up by unit with no cargo capacity', () => {
+      // Tank has cargoSlots: 0
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 }, {
+        cargo: [],
+      });
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [tank],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 5,
+      });
+
+      const action = createPickupBridgeAction('bridge-1', 'tank-1');
+      const result = validatePickupBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('cannot carry cargo');
+    });
+
+    it('should reject picking up by enemy unit', () => {
+      // Crab has cargoSlots: 2
+      const transporter = createUnit('transporter', UnitType.Crab, 'p2', { q: 0, r: 0 }, {
+        cargo: [],
+      });
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [transporter],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 5,
+      });
+
+      const action = createPickupBridgeAction('bridge-1', 'transporter');
+      const result = validatePickupBridgeAction(state, action);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('enemy');
+    });
+  });
+
+  describe('Bridge Movement Blocking', () => {
+    it('should allow land unit to cross bridged sea hex', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Land },
+      ];
+
+      const state = createGameState({
+        units: [tank],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 10,
+      });
+
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 }, // Bridge on sea
+        { q: 2, r: 0 },
+      ];
+
+      const result = validateMoveAction(state, 'tank-1', path);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should block sea unit from entering bridged hex', () => {
+      const motorBoat = createUnit('boat-1', UnitType.MotorBoat, 'p1', { q: 0, r: 0 });
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        units: [motorBoat],
+        terrain,
+        bridges: [bridge],
+        actionPoints: 10,
+        currentTide: TideLevel.Normal,
+      });
+
+      const path: HexCoord[] = [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 }, // Bridge blocks sea units
+      ];
+
+      const result = validateMoveAction(state, 'boat-1', path);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Sea units cannot enter bridged hex');
+    });
+  });
+
+  describe('validateBridgeConnections', () => {
+    it('should mark bridge connected to land as valid', () => {
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        terrain,
+        bridges: [bridge],
+        currentTide: TideLevel.Normal,
+      });
+
+      const results = validateBridgeConnections(state);
+      expect(results).toHaveLength(1);
+      expect(results[0].bridgeId).toBe('bridge-1');
+      expect(results[0].valid).toBe(true);
+    });
+
+    it('should mark bridge connected only via another bridge as valid', () => {
+      const bridge1 = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+      const bridge2 = createBridge('bridge-2', { q: 2, r: 0 }, 'p1');
+
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Land },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Sea },
+      ];
+
+      const state = createGameState({
+        terrain,
+        bridges: [bridge1, bridge2],
+        currentTide: TideLevel.Normal,
+      });
+
+      const results = validateBridgeConnections(state);
+      const bridge1Result = results.find((r) => r.bridgeId === 'bridge-1');
+      const bridge2Result = results.find((r) => r.bridgeId === 'bridge-2');
+
+      expect(bridge1Result?.valid).toBe(true);
+      expect(bridge2Result?.valid).toBe(true);
+    });
+
+    it('should mark bridge as invalid when land connection submerges', () => {
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+
+      // All neighbors are marsh that becomes sea at high tide
+      // For hex (1,0), the 6 neighbors are:
+      // (2,0), (1,1), (0,1), (0,0), (1,-1), (2,-1)
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Marsh },
+        { coord: { q: 0, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: -1 }, type: TerrainType.Marsh },
+        { coord: { q: 2, r: -1 }, type: TerrainType.Marsh },
+      ];
+
+      // At high tide, marsh becomes sea - bridge loses land connection
+      const state = createGameState({
+        terrain,
+        bridges: [bridge],
+        currentTide: TideLevel.High,
+      });
+
+      const results = validateBridgeConnections(state);
+      expect(results).toHaveLength(1);
+      expect(results[0].bridgeId).toBe('bridge-1');
+      expect(results[0].valid).toBe(false);
+    });
+
+    it('should cascade invalidation when connecting bridge is destroyed', () => {
+      const bridge1 = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+      const bridge2 = createBridge('bridge-2', { q: 2, r: 0 }, 'p1');
+      const bridge3 = createBridge('bridge-3', { q: 3, r: 0 }, 'p1');
+
+      // Bridge1 connected to marsh (land at low/normal, sea at high)
+      // Bridge2 and Bridge3 only connected through Bridge1
+      // Need all hex neighbors to be sea/marsh so high tide disconnects them
+      const terrain: HexTerrain[] = [
+        { coord: { q: 0, r: 0 }, type: TerrainType.Marsh },
+        { coord: { q: 1, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 3, r: 0 }, type: TerrainType.Sea },
+        { coord: { q: 4, r: 0 }, type: TerrainType.Sea },
+        // Other neighbors are sea or marsh
+        { coord: { q: 0, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 3, r: 1 }, type: TerrainType.Sea },
+        { coord: { q: 1, r: -1 }, type: TerrainType.Sea },
+        { coord: { q: 2, r: -1 }, type: TerrainType.Sea },
+        { coord: { q: 3, r: -1 }, type: TerrainType.Sea },
+        { coord: { q: 4, r: -1 }, type: TerrainType.Sea },
+      ];
+
+      // At high tide, marsh becomes sea - all bridges lose connection
+      const state = createGameState({
+        terrain,
+        bridges: [bridge1, bridge2, bridge3],
+        currentTide: TideLevel.High,
+      });
+
+      const results = validateBridgeConnections(state);
+      expect(results.every((r) => r.valid === false)).toBe(true);
+    });
+  });
+
+  describe('hasBridgeAt', () => {
+    it('should return true when bridge exists at position', () => {
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+      const state = createGameState({ bridges: [bridge] });
+
+      expect(hasBridgeAt(state, { q: 1, r: 0 })).toBe(true);
+    });
+
+    it('should return false when no bridge at position', () => {
+      const bridge = createBridge('bridge-1', { q: 1, r: 0 }, 'p1');
+      const state = createGameState({ bridges: [bridge] });
+
+      expect(hasBridgeAt(state, { q: 2, r: 0 })).toBe(false);
+    });
+
+    it('should return false when no bridges exist', () => {
+      const state = createGameState({ bridges: [] });
+
+      expect(hasBridgeAt(state, { q: 1, r: 0 })).toBe(false);
     });
   });
 });

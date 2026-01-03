@@ -430,6 +430,20 @@ export interface CaptureAstronefAction extends BaseAction {
   apCost: number; // Cost to move onto astronef hex (movement cost)
 }
 
+export interface PlaceBridgeAction extends BaseAction {
+  type: 'PLACE_BRIDGE';
+  bridgeId: UnitId; // Bridge being placed (from cargo)
+  position: HexCoord; // Where to place it
+  apCost: number; // Always 1 to unload
+}
+
+export interface PickupBridgeAction extends BaseAction {
+  type: 'PICKUP_BRIDGE';
+  bridgeId: UnitId; // Bridge being picked up
+  transporterId: UnitId; // Unit picking up the bridge
+  apCost: number; // Always 1 to load
+}
+
 export type GameAction =
   | MoveAction
   | LoadAction
@@ -445,7 +459,9 @@ export type GameAction =
   | EndTurnAction
   | RebuildTowerAction
   | RetreatAction
-  | CaptureAstronefAction;
+  | CaptureAstronefAction
+  | PlaceBridgeAction
+  | PickupBridgeAction;
 
 // ============================================================================
 // 10. Game Constants
