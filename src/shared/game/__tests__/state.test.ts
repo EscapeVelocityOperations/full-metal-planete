@@ -1221,6 +1221,8 @@ import {
   predictNextTide,
   canPlayerPredictTide,
   getTideProbabilities,
+  getTideForecast,
+  getPlayerConverterCount,
   updateUnitsStuckStatus,
   getStuckUnits,
   isUnitStuckAtPosition,
@@ -1244,6 +1246,100 @@ describe('Tide Prediction', () => {
       });
 
       expect(predictNextTide(state)).toBeUndefined();
+    });
+  });
+
+  describe('getPlayerConverterCount', () => {
+    it('should return 0 when player has no converters', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const state = createGameState({ units: [tank] });
+
+      expect(getPlayerConverterCount(state, 'p1')).toBe(0);
+    });
+
+    it('should return 1 when player has one active converter', () => {
+      const converter = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const state = createGameState({ units: [converter] });
+
+      expect(getPlayerConverterCount(state, 'p1')).toBe(1);
+    });
+
+    it('should return 2 when player has two active converters', () => {
+      const converter1 = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const converter2 = createUnit('converter-2', UnitType.Converter, 'p1', { q: 1, r: 0 });
+      const state = createGameState({ units: [converter1, converter2] });
+
+      expect(getPlayerConverterCount(state, 'p1')).toBe(2);
+    });
+
+    it('should not count converters in cargo (position -9999)', () => {
+      const activeConverter = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const cargoConverter = createUnit('converter-2', UnitType.Converter, 'p1', { q: -9999, r: -9999 });
+      const state = createGameState({ units: [activeConverter, cargoConverter] });
+
+      expect(getPlayerConverterCount(state, 'p1')).toBe(1);
+    });
+
+    it('should not count enemy converters', () => {
+      const ownConverter = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const enemyConverter = createUnit('converter-2', UnitType.Converter, 'p2', { q: 1, r: 0 });
+      const state = createGameState({ units: [ownConverter, enemyConverter] });
+
+      expect(getPlayerConverterCount(state, 'p1')).toBe(1);
+    });
+  });
+
+  describe('getTideForecast', () => {
+    it('should return empty array when player has no converters', () => {
+      const tank = createUnit('tank-1', UnitType.Tank, 'p1', { q: 0, r: 0 });
+      const state = createGameState({
+        units: [tank],
+        tideDeck: [TideLevel.High, TideLevel.Low, TideLevel.Normal],
+      });
+
+      expect(getTideForecast(state, 'p1')).toEqual([]);
+    });
+
+    it('should return 1 turn ahead with 1 converter', () => {
+      const converter = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const state = createGameState({
+        units: [converter],
+        tideDeck: [TideLevel.High, TideLevel.Low, TideLevel.Normal],
+        tideDiscard: [],
+      });
+
+      const forecast = getTideForecast(state, 'p1');
+      expect(forecast).toHaveLength(1);
+      expect(forecast[0]).toBe(TideLevel.High);
+    });
+
+    it('should return 2 turns ahead with 2 converters', () => {
+      const converter1 = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const converter2 = createUnit('converter-2', UnitType.Converter, 'p1', { q: 1, r: 0 });
+      const state = createGameState({
+        units: [converter1, converter2],
+        tideDeck: [TideLevel.High, TideLevel.Low, TideLevel.Normal],
+        tideDiscard: [],
+      });
+
+      const forecast = getTideForecast(state, 'p1');
+      expect(forecast).toHaveLength(2);
+      expect(forecast[0]).toBe(TideLevel.High);
+      expect(forecast[1]).toBe(TideLevel.Low);
+    });
+
+    it('should cap forecast at 2 even with 3+ converters', () => {
+      const converter1 = createUnit('converter-1', UnitType.Converter, 'p1', { q: 0, r: 0 });
+      const converter2 = createUnit('converter-2', UnitType.Converter, 'p1', { q: 1, r: 0 });
+      const converter3 = createUnit('converter-3', UnitType.Converter, 'p1', { q: 2, r: 0 });
+      const state = createGameState({
+        units: [converter1, converter2, converter3],
+        tideDeck: [TideLevel.High, TideLevel.Low, TideLevel.Normal],
+        tideDiscard: [],
+      });
+
+      const forecast = getTideForecast(state, 'p1');
+      expect(forecast).toHaveLength(2);
     });
   });
 
