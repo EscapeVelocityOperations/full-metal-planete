@@ -87,6 +87,12 @@ export class HUD {
   private scoreboardTbody: HTMLElement;
   private scoreboardExpanded: boolean = true;
 
+  // Audio controls
+  private audioMuteBtn: HTMLButtonElement | null = null;
+  private audioVolumeSlider: HTMLInputElement | null = null;
+  private audioMuteCallback: (() => void) | null = null;
+  private audioVolumeCallback: ((volume: number) => void) | null = null;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -1197,6 +1203,95 @@ export class HUD {
     }
     if (this.undoBtn) {
       this.undoBtn.disabled = true;
+    }
+  }
+
+  // ============================================================================
+  // Audio Controls
+  // ============================================================================
+
+  /**
+   * Set up audio control elements (called when game section is shown)
+   */
+  private initializeAudioControls(): void {
+    // Create audio control container if it doesn't exist
+    let audioControls = document.getElementById('audio-controls');
+    if (!audioControls) {
+      audioControls = document.createElement('div');
+      audioControls.id = 'audio-controls';
+      audioControls.className = 'audio-controls';
+      audioControls.innerHTML = `
+        <button id="audio-mute-btn" class="btn btn-audio" title="Toggle sound">
+          🔊
+        </button>
+        <input type="range" id="audio-volume-slider" class="audio-volume-slider"
+               min="0" max="100" value="50" title="Volume">
+      `;
+
+      // Add to game section (near zoom controls)
+      const gameSection = document.getElementById('game-section');
+      if (gameSection) {
+        gameSection.appendChild(audioControls);
+      }
+    }
+
+    this.audioMuteBtn = document.getElementById('audio-mute-btn') as HTMLButtonElement;
+    this.audioVolumeSlider = document.getElementById('audio-volume-slider') as HTMLInputElement;
+
+    // Set up event listeners
+    this.audioMuteBtn?.addEventListener('click', () => {
+      if (this.audioMuteCallback) {
+        this.audioMuteCallback();
+      }
+    });
+
+    this.audioVolumeSlider?.addEventListener('input', () => {
+      if (this.audioVolumeCallback && this.audioVolumeSlider) {
+        const volume = parseInt(this.audioVolumeSlider.value, 10) / 100;
+        this.audioVolumeCallback(volume);
+      }
+    });
+  }
+
+  /**
+   * Set audio mute toggle callback
+   */
+  onAudioMuteToggle(callback: () => void): void {
+    this.audioMuteCallback = callback;
+    // Initialize controls if not already done
+    if (!this.audioMuteBtn) {
+      this.initializeAudioControls();
+    }
+  }
+
+  /**
+   * Set audio volume change callback
+   */
+  onAudioVolumeChange(callback: (volume: number) => void): void {
+    this.audioVolumeCallback = callback;
+    // Initialize controls if not already done
+    if (!this.audioVolumeSlider) {
+      this.initializeAudioControls();
+    }
+  }
+
+  /**
+   * Update the mute button display state
+   */
+  updateAudioMuteState(muted: boolean): void {
+    if (this.audioMuteBtn) {
+      this.audioMuteBtn.textContent = muted ? '🔇' : '🔊';
+      this.audioMuteBtn.classList.toggle('muted', muted);
+      this.audioMuteBtn.title = muted ? 'Unmute sound' : 'Mute sound';
+    }
+  }
+
+  /**
+   * Update the volume slider display
+   */
+  updateAudioVolume(volume: number): void {
+    if (this.audioVolumeSlider) {
+      this.audioVolumeSlider.value = String(Math.round(volume * 100));
     }
   }
 

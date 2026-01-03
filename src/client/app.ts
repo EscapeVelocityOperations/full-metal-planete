@@ -9,6 +9,7 @@ import { GameClient } from './game-client';
 import { HUD, type LobbyPlayer, type PhaseInfo, type UnitActionContext, type ActionHistoryEntry } from './ui/hud';
 import { InputHandler } from './ui/input-handler';
 import { DeploymentInventory } from './ui/deployment-inventory';
+import { getAudioManager, type AudioManager } from './audio';
 import { UnitType, TideLevel, GamePhase, UNIT_PROPERTIES, type GameState, type HexCoord, type Unit, type MoveAction, type LandAstronefAction, type LoadAction, type UnloadAction, type TerrainType, type HexTerrain } from '@/shared/game/types';
 import { hexKey, hexRotateAround, findPath, getReachableHexes, type PathTerrainGetter, getOccupiedHexes } from '@/shared/game/hex';
 import { generateDemoMap } from '@/shared/game/map-generator';
@@ -30,6 +31,7 @@ export class GameApp {
   private input: InputHandler | null = null;
   private canvas: HTMLCanvasElement;
   private config: GameConfig;
+  private audio: AudioManager;
 
   private gameState: GameState | null = null;
   private selectedUnit: Unit | null = null;
@@ -56,13 +58,18 @@ export class GameApp {
   private turnStateSnapshots: GameState[] = [];
   private actionSequence: number = 0;
 
+  // Audio state tracking
+  private previousTide: TideLevel | null = null;
+
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
     this.config = config;
     this.client = new GameClient(config.gameId, config.playerId, config.token);
     this.hud = new HUD();
+    this.audio = getAudioManager();
 
     this.setupEventHandlers();
+    this.setupAudioControls();
   }
 
   /**
@@ -70,6 +77,9 @@ export class GameApp {
    */
   async initialize(): Promise<void> {
     this.hud.showLoading();
+
+    // Initialize audio (will be fully activated on first user interaction)
+    await this.audio.initialize();
 
     // Initialize renderer using factory (defaults to CSS, falls back from WebGPU if needed)
     this.renderer = await createRenderer(this.canvas, this.rendererType);
@@ -306,6 +316,26 @@ export class GameApp {
         this.renderer.zoomToFit();
       }
     });
+  }
+
+  /**
+   * Set up audio control handlers
+   */
+  private setupAudioControls(): void {
+    // Connect HUD audio controls to AudioManager
+    this.hud.onAudioMuteToggle(() => {
+      const muted = this.audio.toggleMute();
+      this.hud.updateAudioMuteState(muted);
+      this.audio.play('click');
+    });
+
+    this.hud.onAudioVolumeChange((volume: number) => {
+      this.audio.setMasterVolume(volume);
+    });
+
+    // Initialize HUD with current audio state
+    this.hud.updateAudioMuteState(this.audio.isMuted());
+    this.hud.updateAudioVolume(this.audio.getSettings().masterVolume);
   }
 
   /**
@@ -566,6 +596,9 @@ export class GameApp {
     this.updateGameState(gameState);
     this.hud.showScoreboard();
     this.hud.showMessage('Game started!', 3000);
+
+    // Play game start sound
+    this.audio.play('success');
   }
 
   /**
@@ -628,6 +661,12 @@ export class GameApp {
     if (gameState.currentTide && this.renderer) {
       this.renderer.setTide(gameState.currentTide);
       this.hud.updateTide(gameState.currentTide);
+
+      // Play tide change sound if tide actually changed
+      if (this.previousTide !== null && this.previousTide !== gameState.currentTide) {
+        this.audio.play('tideChange');
+      }
+      this.previousTide = gameState.currentTide;
     }
 
     // Update tide forecast based on converter ownership
@@ -949,6 +988,8 @@ export class GameApp {
 
     this.client.sendAction(action);
     this.hud.showMessage('Landing astronef...', 2000);
+    // Play landing sound
+    this.audio.play('landing');
     // Server will send STATE_UPDATE with authoritative state
   }
 
@@ -1040,6 +1081,9 @@ export class GameApp {
     this.selectedUnit = unit;
     this.hud.showMessage(`Selected ${unit.type}`, 2000);
     console.log('Selected unit:', unit);
+
+    // Play unit selection sound
+    this.audio.play('unitSelect');
 
     // Show unit context panel for transporter units
     this.showUnitContextPanel(unit);
@@ -1134,6 +1178,8 @@ export class GameApp {
       this.selectedUnit = null;
       this.hud.hideUnitActions();
       this.hud.showMessage('Unit deselected', 1000);
+      // Play deselection sound
+      this.audio.play('unitDeselect');
       // Clear visual highlights
       this.renderer?.clearHighlights?.();
       this.renderer?.clearUnitSelections?.();
@@ -1214,6 +1260,9 @@ export class GameApp {
     this.gameState.actionPoints -= 1;
     this.updateGameState({ actionPoints: this.gameState.actionPoints });
 
+    // Play load sound
+    this.audio.play('load');
+
     // Refresh unit context panel
     this.showUnitContextPanel(this.selectedUnit);
     this.hud.showMessage('Mineral loaded!', 1500);
@@ -1264,6 +1313,9 @@ export class GameApp {
 
     this.gameState.actionPoints -= 1;
     this.updateGameState({ actionPoints: this.gameState.actionPoints });
+
+    // Play unload sound
+    this.audio.play('unload');
 
     // Refresh unit context panel
     this.showUnitContextPanel(this.selectedUnit);
@@ -1357,8 +1409,10 @@ export class GameApp {
     const pathInfo = stepsCount > 1 ? ` (${stepsCount} hexes)` : '';
     if (apCost > this.gameState.actionPoints) {
       this.hud.showMessage(`Need ${apCost} AP${pathInfo} (have ${this.gameState.actionPoints}) - Click again to cancel`, 3000);
+      this.audio.play('error');
     } else {
       this.hud.showMessage(`Move for ${apCost} AP${pathInfo} - Click again to confirm`, 3000);
+      this.audio.play('click');
     }
   }
 
@@ -1416,6 +1470,9 @@ export class GameApp {
     if (this.renderer?.setUnits) {
       this.renderer.setUnits(this.gameState.units);
     }
+
+    // Play movement sound
+    this.audio.play('moveComplete');
 
     this.hud.showMessage(`Moved for ${apCost} AP`, 1500);
     this.clearMovementPreview();
@@ -1728,6 +1785,13 @@ export class GameApp {
       }
 
       this.updateGameState(this.gameState);
+
+      // Play turn sound if it's now our turn
+      if (nextPlayer === this.client['playerId']) {
+        this.audio.play('turnStart');
+      } else {
+        this.audio.play('turnEnd');
+      }
     }
   }
 
@@ -1777,6 +1841,7 @@ export class GameApp {
     if (!canLiftOff(this.gameState, playerId)) {
       const cost = calculateTakeOffCost(this.gameState, playerId);
       this.hud.showMessage(`Cannot lift off (need ${cost} AP)`, 2000);
+      this.audio.play('error');
       return;
     }
 
@@ -1790,6 +1855,9 @@ export class GameApp {
       decision: 'now',
       timestamp: Date.now(),
     });
+
+    // Play lift-off sound
+    this.audio.play('liftOff');
 
     this.hud.hideLiftOffButton();
     this.hud.showMessage('Astronef lifted off!', 3000);
@@ -1943,6 +2011,7 @@ export class GameApp {
   destroy(): void {
     this.hud.destroy();
     this.client.disconnect();
+    this.audio.destroy();
 
     if (this.input) {
       this.input.destroy();
