@@ -87,6 +87,10 @@ export class HUD {
   private scoreboardTbody: HTMLElement;
   private scoreboardExpanded: boolean = true;
 
+  // Turn Order
+  private turnOrderPanel: HTMLElement;
+  private turnOrderContent: HTMLElement;
+
   constructor() {
     this.apValueEl = document.getElementById('ap-value')!;
     this.turnValueEl = document.getElementById('turn-value')!;
@@ -122,6 +126,10 @@ export class HUD {
     this.scoreboardPanel = document.getElementById('scoreboard-panel')!;
     this.scoreboardToggle = document.getElementById('scoreboard-toggle') as HTMLButtonElement;
     this.scoreboardTbody = document.getElementById('scoreboard-body')!;
+
+    // Turn Order
+    this.turnOrderPanel = document.getElementById('turn-order-panel')!;
+    this.turnOrderContent = document.getElementById('turn-order-content')!;
 
     // Setup scoreboard toggle
     this.scoreboardToggle?.addEventListener('click', () => {
@@ -802,6 +810,78 @@ export class HUD {
     document.getElementById('game-over-close-btn')?.addEventListener('click', () => {
       this.liftOffModal!.style.display = 'none';
     });
+  }
+
+  // ============================================================================
+  // Turn Order Display
+  // ============================================================================
+
+  /**
+   * Update the turn order display showing all players in play sequence.
+   * @param turnOrder Array of player IDs in turn order
+   * @param currentPlayerId ID of the player whose turn it is
+   * @param players Player info for names and colors
+   */
+  updateTurnOrder(
+    turnOrder: string[],
+    currentPlayerId: string,
+    players: Array<{
+      id: string;
+      name: string;
+      color: string;
+      hasLiftedOff: boolean;
+      isConnected?: boolean;
+    }>
+  ): void {
+    if (!this.turnOrderContent) return;
+
+    // Build a map of player data by ID
+    const playerMap = new Map(players.map(p => [p.id, p]));
+
+    // Generate the turn order list HTML
+    const listItems = turnOrder.map((playerId, index) => {
+      const player = playerMap.get(playerId);
+      if (!player) return '';
+
+      const isCurrent = playerId === currentPlayerId;
+      const classes = ['turn-order-item'];
+      if (isCurrent) classes.push('current');
+      if (player.hasLiftedOff) classes.push('lifted-off');
+      if (player.isConnected === false) classes.push('disconnected');
+
+      const disconnectedIcon = player.isConnected === false ? '<span title="Disconnected">⚠️</span>' : '';
+      const liftoffIcon = player.hasLiftedOff ? '<span title="Lifted Off">🚀</span>' : '';
+      const currentIndicator = isCurrent ? '<span class="turn-order-indicator">▶</span>' : '';
+
+      return `
+        <li class="${classes.join(' ')}">
+          <span class="turn-order-number">${index + 1}</span>
+          <span class="turn-order-color" style="background-color: ${this.getPlayerColorHex(player.color)}"></span>
+          <span class="turn-order-name">${disconnectedIcon}${player.name}${liftoffIcon}</span>
+          ${currentIndicator}
+        </li>
+      `;
+    }).join('');
+
+    this.turnOrderContent.innerHTML = `<ul class="turn-order-list">${listItems}</ul>`;
+  }
+
+  /**
+   * Show the turn order panel
+   */
+  showTurnOrder(): void {
+    if (this.turnOrderPanel) {
+      this.turnOrderPanel.classList.remove('hidden');
+    }
+  }
+
+  /**
+   * Hide the turn order panel
+   */
+  hideTurnOrder(): void {
+    if (this.turnOrderPanel) {
+      this.turnOrderPanel.classList.add('hidden');
+    }
   }
 
   // ============================================================================

@@ -588,11 +588,119 @@
         color: #fff;
       }
 
+      /* Turn Order Panel */
+      #turn-order-panel {
+        position: absolute;
+        top: 80px;
+        left: 20px;
+        background: rgba(0, 0, 0, 0.9);
+        border: 2px solid #e94560;
+        border-radius: 12px;
+        min-width: 180px;
+        z-index: 16;
+      }
+
+      #turn-order-panel.hidden {
+        display: none;
+      }
+
+      .turn-order-header {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 10px 16px;
+        background: rgba(233, 69, 96, 0.2);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px 10px 0 0;
+      }
+
+      .turn-order-title {
+        font-size: 12px;
+        font-weight: bold;
+        color: #e94560;
+        letter-spacing: 1px;
+      }
+
+      .turn-order-content {
+        padding: 12px;
+      }
+
+      .turn-order-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .turn-order-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.03);
+        transition: all 0.3s ease;
+      }
+
+      .turn-order-item.current {
+        background: rgba(233, 69, 96, 0.3);
+        border: 2px solid #e94560;
+        animation: currentPlayerPulse 2s ease-in-out infinite;
+      }
+
+      @keyframes currentPlayerPulse {
+        0%, 100% { box-shadow: 0 0 5px rgba(233, 69, 96, 0.5); }
+        50% { box-shadow: 0 0 15px rgba(233, 69, 96, 0.8); }
+      }
+
+      .turn-order-item.disconnected {
+        opacity: 0.5;
+      }
+
+      .turn-order-item.lifted-off {
+        opacity: 0.6;
+        text-decoration: line-through;
+      }
+
+      .turn-order-number {
+        font-size: 11px;
+        color: #888;
+        min-width: 16px;
+      }
+
+      .turn-order-color {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .turn-order-name {
+        flex: 1;
+        color: #ccc;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .turn-order-item.current .turn-order-name {
+        color: #fff;
+        font-weight: bold;
+      }
+
+      .turn-order-indicator {
+        font-size: 10px;
+        color: #e94560;
+      }
+
       /* Scoreboard Panel */
       #scoreboard-panel {
         position: absolute;
         top: 80px;
-        left: 250px;
+        left: 220px;
         background: rgba(0, 0, 0, 0.9);
         border: 2px solid #666;
         border-radius: 12px;
@@ -1279,6 +1387,16 @@
         </div>
         <div class="instructions-content" id="instructions-content">
           Click on the map to position your Astronef. Choose 4 adjacent hexes on land or marsh terrain.
+        </div>
+      </div>
+
+      <!-- Turn Order Panel -->
+      <div id="turn-order-panel" class="hidden">
+        <div class="turn-order-header">
+          <span class="turn-order-title">TURN ORDER</span>
+        </div>
+        <div class="turn-order-content" id="turn-order-content">
+          <!-- Populated dynamically -->
         </div>
       </div>
 
