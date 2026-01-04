@@ -100,6 +100,47 @@ bd stats              # Project statistics
 - 3-minute turn timer is enforced per player
 - Game supports 2-4 players
 
+## Sub-Agent Delegation
 
-## FULL RULES ARE AVAILBLE HERE
+Use the `Task` tool with specialized agents for complex work:
+
+| Task Type | Agent | When to Use |
+|-----------|-------|-------------|
+| **Game logic** | `game-dev-specialist` | Rule implementation, validation, game state, win conditions |
+| **Multi-file changes** | `fullstack-developer` | Cross-layer features, merge conflicts |
+| **Codebase exploration** | `Explore` | Finding patterns, understanding architecture |
+| **Performance** | `performance-engineer` | Render optimization, game loop efficiency |
+| **Testing** | `quality-engineer` | Edge cases, test strategy |
+| **UI components** | `frontend-architect` | HUD, controls, responsive design |
+
+### When to Delegate
+
+**Always delegate when:**
+- Task touches >3 files
+- Implementing new game rules or mechanics
+- Resolving merge conflicts
+- Cross-file refactoring
+
+**Example:**
+```
+Task: "Implement bridge mechanics from Section 9 of rules"
+→ Use game-dev-specialist agent (rule implementation)
+
+Task: "Add replay system with UI controls"
+→ Use fullstack-developer agent (cross-layer feature)
+
+Task: "Find all combat-related code"
+→ Use Explore agent (codebase search)
+```
+
+### Game-Specific Guidance
+
+For this project, prefer `game-dev-specialist` for:
+- Hex grid mechanics and pathfinding
+- Turn management and action validation
+- Combat resolution and unit interactions
+- Tide system and terrain effects
+- Score calculation and win conditions
+
+## FULL RULES ARE AVAILABLE HERE
 http://jeuxstrategie.free.fr/Full_metal_planete_complet.php
