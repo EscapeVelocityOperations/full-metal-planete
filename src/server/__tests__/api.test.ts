@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer } from '../api.js';
 import type { FastifyInstance } from 'fastify';
 
-describe('API Endpoints', () => {
+// Skip under Bun - light-my-request uses Node.js internals (_header) not available in Bun
+const isBun = typeof globalThis.Bun !== 'undefined';
+
+describe.skipIf(isBun)('API Endpoints', () => {
   let app: FastifyInstance;
 
   beforeEach(async () => {
