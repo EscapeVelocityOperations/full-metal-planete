@@ -27,6 +27,7 @@ import {
   type PerformanceProfile,
   type OptimizationSettings,
 } from './performance';
+import { getUnitSpriteUrl, getMineralSpriteUrl, preloadAllSprites } from '../sprites';
 
 // Zoom configuration
 const MIN_ZOOM = 0.3;
@@ -86,18 +87,7 @@ const UNIT_SYMBOLS: Record<UnitType, string> = {
   [UnitType.Bridge]: '\u2550', // Double horizontal
 };
 
-// Unit type to sprite filename mapping
-const UNIT_SPRITE_NAMES: Record<UnitType, string> = {
-  [UnitType.Astronef]: 'astronef',
-  [UnitType.Tower]: 'tower',
-  [UnitType.Tank]: 'tank',
-  [UnitType.SuperTank]: 'supertank',
-  [UnitType.MotorBoat]: 'motorboat',
-  [UnitType.Barge]: 'barge',
-  [UnitType.Crab]: 'crab',
-  [UnitType.Converter]: 'converter',
-  [UnitType.Bridge]: 'bridge',
-};
+// Unit sprite handling is now in sprites.ts module
 
 // Player color to CSS color mapping
 const PLAYER_COLORS: Record<string, string> = {
@@ -527,21 +517,9 @@ export class CSSHexRenderer {
         }
       }
 
-      /* Mineral indicators */
+      /* Mineral indicators - using PNG sprites */
       .mineral-marker {
         position: absolute;
-        width: 16px;
-        height: 16px;
-        ${enableComplexFilters
-          ? `background: radial-gradient(circle at 30% 30%, #ff8c4a, #e55a3c 60%, #b33a1c);
-             box-shadow:
-               0 2px 4px rgba(0, 0, 0, 0.4),
-               inset 0 -2px 4px rgba(0, 0, 0, 0.3),
-               inset 0 2px 4px rgba(255, 200, 150, 0.4);`
-          : `background: #e55a3c;
-             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);`
-        }
-        border-radius: 50%;
         pointer-events: none;
         z-index: 5;
         ${enableTransitions ? 'transition: opacity 0.3s ease;' : ''}
@@ -722,9 +700,20 @@ export class CSSHexRenderer {
     // Calculate pixel position
     const pos = axialToPixel(mineral.position.q, mineral.position.r, HEX_SIZE);
 
+    // Mineral sprite size
+    const mineralSize = 24;
+
     // Center the mineral on the hex
-    element.style.left = `${pos.x - 8}px`; // 8 = 16px width / 2
-    element.style.top = `${pos.y - 8}px`;  // 8 = 16px height / 2
+    element.style.left = `${pos.x - mineralSize / 2}px`;
+    element.style.top = `${pos.y - mineralSize / 2}px`;
+    element.style.width = `${mineralSize}px`;
+    element.style.height = `${mineralSize}px`;
+
+    // Use PNG sprite for mineral
+    element.style.backgroundImage = `url(${getMineralSpriteUrl()})`;
+    element.style.backgroundSize = 'contain';
+    element.style.backgroundRepeat = 'no-repeat';
+    element.style.backgroundPosition = 'center';
 
     // Check if mineral is underwater based on tide and terrain
     const terrain = this.getTerrainAtHex(mineral.position);
@@ -821,9 +810,6 @@ export class CSSHexRenderer {
     const hexWidth = HEX_SIZE * 2;
     const hexHeight = HEX_SIZE * Math.sqrt(3);
 
-    // Get sprite filename for this unit type
-    const spriteName = UNIT_SPRITE_NAMES[unit.type] || 'tank';
-
     // Special handling for Astronef - sprite spans 4 hexes in Y shape
     if (unit.type === UnitType.Astronef && footprint.length === 4) {
       const marker = document.createElement('div');
@@ -844,16 +830,14 @@ export class CSSHexRenderer {
       marker.style.width = `${astronefWidth}px`;
       marker.style.height = `${astronefHeight}px`;
       marker.classList.add('sprite-mode');
-      marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+      // Use PNG sprite with rotation
+      marker.style.backgroundImage = `url(${getUnitSpriteUrl(unit.type, unit.rotation || 0)})`;
       marker.style.backgroundSize = 'contain';
       marker.style.backgroundRepeat = 'no-repeat';
       marker.style.backgroundPosition = 'center';
       marker.style.zIndex = '1'; // Lower z-index so Tower can layer on top
 
-      // Apply rotation (each step is 60 degrees)
-      if (unit.rotation && unit.rotation !== 0) {
-        marker.style.transform = `rotate(${unit.rotation * 60}deg)`;
-      }
+      // PNG sprites already have rotation baked in, no CSS transform needed
 
       container.appendChild(marker);
 
@@ -874,9 +858,6 @@ export class CSSHexRenderer {
       const midX = (pos1.x + pos2.x) / 2;
       const midY = (pos1.y + pos2.y) / 2;
 
-      // Calculate angle between hexes for rotation
-      const angle = Math.atan2(pos2.y - pos1.y, pos2.x - pos1.x) * (180 / Math.PI);
-
       // Barge spans 2 hexes horizontally (wider element)
       const bargeWidth = hexWidth * 1.8;
       marker.style.position = 'absolute';
@@ -885,12 +866,13 @@ export class CSSHexRenderer {
       marker.style.width = `${bargeWidth}px`;
       marker.style.height = `${hexHeight}px`;
       marker.classList.add('sprite-mode');
-      marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+      // Use PNG sprite with rotation (sprites already have rotation baked in)
+      marker.style.backgroundImage = `url(${getUnitSpriteUrl(unit.type, unit.rotation || 0)})`;
       marker.style.backgroundSize = 'contain';
       marker.style.backgroundRepeat = 'no-repeat';
       marker.style.backgroundPosition = 'center';
       marker.style.zIndex = '1';
-      marker.style.transform = `rotate(${angle}deg)`;
+      // PNG sprites already have rotation baked in, no CSS transform needed
 
       container.appendChild(marker);
 
@@ -912,7 +894,8 @@ export class CSSHexRenderer {
       marker.style.width = `${hexWidth}px`;
       marker.style.height = `${hexHeight}px`;
       marker.classList.add('sprite-mode');
-      marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
+      // Use PNG sprite with rotation (Tower has 3 rotations: 0, 120, 240)
+      marker.style.backgroundImage = `url(${getUnitSpriteUrl(unit.type, unit.rotation || 0)})`;
       marker.style.backgroundSize = 'contain';
       marker.style.backgroundRepeat = 'no-repeat';
       marker.style.backgroundPosition = 'center';
@@ -938,11 +921,12 @@ export class CSSHexRenderer {
         // For multi-hex units, show sprite only on anchor hex (index 0)
         // Secondary hexes show a colored dot
         if (index === 0) {
-          marker.style.backgroundImage = `url(/sprites/units/${ownerColor}/${spriteName}.svg)`;
-          // Apply rotation transform for units that support it
-          if (unit.rotation && unit.rotation !== 0) {
-            marker.style.transform = `rotate(${unit.rotation * 60}deg)`;
-          }
+          // Use PNG sprite with rotation (sprites already have rotation baked in)
+          marker.style.backgroundImage = `url(${getUnitSpriteUrl(unit.type, unit.rotation || 0)})`;
+          marker.style.backgroundSize = 'contain';
+          marker.style.backgroundRepeat = 'no-repeat';
+          marker.style.backgroundPosition = 'center';
+          // PNG sprites already have rotation baked in, no CSS transform needed
         } else {
           // Secondary hex indicator
           marker.style.backgroundColor = color;
