@@ -44,8 +44,11 @@ export class GameClient {
   private ws: WebSocket | null = null;
   private listeners: Map<keyof GameClientEvents, Set<Function>> = new Map();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = 10;
   private reconnectDelay = 1000;
+  private maxReconnectDelay = 30000;
+  private isReconnecting = false;
+  private intentionallyDisconnected = false;
   private pingInterval: number | null = null;
 
   constructor(
@@ -64,17 +67,24 @@ export class GameClient {
 
       this.ws.onopen = () => {
         console.log('WebSocket connected');
+        // Reset reconnection state on successful connection
         this.reconnectAttempts = 0;
+        this.isReconnecting = false;
+        this.intentionallyDisconnected = false;
         this.startPingInterval();
         this.emit('connected');
         resolve();
       };
 
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected');
+      this.ws.onclose = (event) => {
+        console.log('WebSocket disconnected', event.code, event.reason);
         this.stopPingInterval();
-        this.emit('disconnected');
-        this.attemptReconnect();
+
+        // Only attempt reconnect if this wasn't an intentional disconnect
+        if (!this.intentionallyDisconnected) {
+          this.emit('disconnected');
+          this.attemptReconnect();
+        }
       };
 
       this.ws.onerror = (error) => {
@@ -279,22 +289,38 @@ export class GameClient {
   }
 
   /**
-   * Attempt to reconnect
+   * Attempt to reconnect with exponential backoff and jitter
    */
   private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnect attempts reached');
+    if (this.isReconnecting) {
+      // Already attempting to reconnect
       return;
     }
 
-    this.reconnectAttempts++;
-    const delay = this.reconnectDelay * this.reconnectAttempts;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error('Max reconnect attempts reached');
+      this.emit('error', { code: 'RECONNECT_FAILED', message: 'Unable to reconnect to server' });
+      return;
+    }
 
-    console.log(`Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts})`);
+    this.isReconnecting = true;
+    this.reconnectAttempts++;
+
+    // Exponential backoff with jitter: delay = base_delay * 2^(attempt-1) + random_jitter
+    const exponentialDelay = Math.min(
+      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectDelay
+    );
+    const jitter = Math.random() * 1000; // Add up to 1 second of random jitter
+    const delay = exponentialDelay + jitter;
+
+    console.log(`Reconnecting in ${Math.round(delay)}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
 
     setTimeout(() => {
       this.connect().catch((error) => {
         console.error('Reconnect failed:', error);
+        this.isReconnecting = false;
+        // If connect fails, attemptReconnect will be called again by onclose
       });
     }, delay);
   }
@@ -345,9 +371,12 @@ export class GameClient {
   }
 
   /**
-   * Disconnect from server
+   * Disconnect from server (intentional - won't trigger reconnection)
    */
   disconnect(): void {
+    this.intentionallyDisconnected = true;
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
     this.stopPingInterval();
     if (this.ws) {
       this.ws.close();
@@ -360,5 +389,19 @@ export class GameClient {
    */
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Check if currently reconnecting
+   */
+  isReconnectingState(): boolean {
+    return this.isReconnecting;
+  }
+
+  /**
+   * Get current reconnection attempt count
+   */
+  getReconnectAttempts(): number {
+    return this.reconnectAttempts;
   }
 }
