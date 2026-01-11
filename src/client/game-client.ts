@@ -40,6 +40,17 @@ export interface GameClientEvents {
   liftOffDecisionsRevealed: (data: LiftOffDecisionsRevealed) => void;
 }
 
+/**
+ * Connection state enum for tracking WebSocket connection status
+ */
+export enum ConnectionState {
+  Disconnected = 'disconnected',
+  Connecting = 'connecting',
+  Connected = 'connected',
+  Reconnecting = 'reconnecting',
+  Failed = 'failed',
+}
+
 export class GameClient {
   private ws: WebSocket | null = null;
   private listeners: Map<keyof GameClientEvents, Set<Function>> = new Map();
@@ -50,6 +61,7 @@ export class GameClient {
   private isReconnecting = false;
   private intentionallyDisconnected = false;
   private pingInterval: number | null = null;
+  private connectionState: ConnectionState = ConnectionState.Disconnected;
 
   constructor(
     private gameId: string,
@@ -61,12 +73,17 @@ export class GameClient {
    * Connect to the game server
    */
   async connect(): Promise<void> {
+    // Set state to connecting
+    this.connectionState = ConnectionState.Connecting;
+
     return new Promise((resolve, reject) => {
       const wsUrl = this.getWebSocketUrl();
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         console.log('WebSocket connected');
+        // Update connection state
+        this.connectionState = ConnectionState.Connected;
         // Reset reconnection state on successful connection
         this.reconnectAttempts = 0;
         this.isReconnecting = false;
@@ -80,6 +97,11 @@ export class GameClient {
         console.log('WebSocket disconnected', event.code, event.reason);
         this.stopPingInterval();
 
+        // Update connection state
+        if (this.connectionState !== ConnectionState.Failed) {
+          this.connectionState = ConnectionState.Disconnected;
+        }
+
         // Only attempt reconnect if this wasn't an intentional disconnect
         if (!this.intentionallyDisconnected) {
           this.emit('disconnected');
@@ -89,6 +111,7 @@ export class GameClient {
 
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
+        this.connectionState = ConnectionState.Failed;
         reject(error);
       };
 
@@ -299,11 +322,13 @@ export class GameClient {
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('Max reconnect attempts reached');
+      this.connectionState = ConnectionState.Failed;
       this.emit('error', { code: 'RECONNECT_FAILED', message: 'Unable to reconnect to server' });
       return;
     }
 
     this.isReconnecting = true;
+    this.connectionState = ConnectionState.Reconnecting;
     this.reconnectAttempts++;
 
     // Exponential backoff with jitter: delay = base_delay * 2^(attempt-1) + random_jitter
@@ -320,6 +345,10 @@ export class GameClient {
       this.connect().catch((error) => {
         console.error('Reconnect failed:', error);
         this.isReconnecting = false;
+        // Update state if reconnect failed
+        if (this.connectionState === ConnectionState.Reconnecting) {
+          this.connectionState = ConnectionState.Disconnected;
+        }
         // If connect fails, attemptReconnect will be called again by onclose
       });
     }, delay);
@@ -377,6 +406,7 @@ export class GameClient {
     this.intentionallyDisconnected = true;
     this.isReconnecting = false;
     this.reconnectAttempts = 0;
+    this.connectionState = ConnectionState.Disconnected;
     this.stopPingInterval();
     if (this.ws) {
       this.ws.close();
@@ -403,5 +433,12 @@ export class GameClient {
    */
   getReconnectAttempts(): number {
     return this.reconnectAttempts;
+  }
+
+  /**
+   * Get current connection state
+   */
+  getConnectionState(): ConnectionState {
+    return this.connectionState;
   }
 }
