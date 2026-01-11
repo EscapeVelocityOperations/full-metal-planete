@@ -30,6 +30,8 @@ import {
   type ValidationResult,
   type CaptureAstronefAction,
   type RebuildTowerAction,
+  type PlaceBridgeAction,
+  type PickupBridgeAction,
 } from './types';
 import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP, validateBridgeConnections } from './actions';
 import { hexKey, hexNeighbors, hexEqual } from './hex';
@@ -2035,10 +2037,12 @@ export function forceFinalLiftOff(state: GameState): GameState {
  */
 export function applyPlaceBridgeAction(
   state: GameState,
-  action: { bridgeId: string; transporterId: string; position: HexCoord; playerId: string }
+  action: PlaceBridgeAction
 ): GameState {
-  // Find the transporter
-  const transporter = state.units.find((u) => u.id === action.transporterId);
+  // Find the transporter carrying the bridge
+  const transporter = state.units.find(
+    (u) => u.cargo && u.cargo.includes(action.bridgeId) && u.owner === action.playerId
+  );
   if (!transporter) return state;
 
   // Remove bridge from transporter cargo
@@ -2062,7 +2066,7 @@ export function applyPlaceBridgeAction(
     ...state,
     units: updatedUnits,
     bridges: [...state.bridges, bridgePlacement],
-    actionPoints: state.actionPoints - 1,
+    actionPoints: state.actionPoints - action.apCost,
   };
 }
 
@@ -2076,7 +2080,7 @@ export function applyPlaceBridgeAction(
  */
 export function applyPickupBridgeAction(
   state: GameState,
-  action: { bridgeId: string; transporterId: string; playerId: string }
+  action: PickupBridgeAction
 ): GameState {
   // Find the transporter
   const transporter = state.units.find((u) => u.id === action.transporterId);
@@ -2103,7 +2107,7 @@ export function applyPickupBridgeAction(
     ...state,
     units: updatedUnits,
     bridges: updatedBridges,
-    actionPoints: state.actionPoints - 1,
+    actionPoints: state.actionPoints - action.apCost,
   };
 }
 
