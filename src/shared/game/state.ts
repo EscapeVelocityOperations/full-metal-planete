@@ -2017,3 +2017,143 @@ export function forceFinalLiftOff(state: GameState): GameState {
     phase: GamePhase.Finished,
   };
 }
+
+// ============================================================================
+// Bridge Actions (Section 9)
+// ============================================================================
+
+/**
+ * Apply a place bridge action to the game state.
+ *
+ * Per rules Section 9:
+ * - Bridge is removed from transporter cargo
+ * - Bridge is placed on the board at target position
+ * - Bridge becomes neutral (any player can use)
+ * - Costs 1 AP
+ */
+export function applyPlaceBridgeAction(
+  state: GameState,
+  action: { bridgeId: string; transporterId: string; position: HexCoord; playerId: string }
+): GameState {
+  // Find the transporter
+  const transporter = state.units.find((u) => u.id === action.transporterId);
+  if (!transporter) return state;
+
+  // Remove bridge from transporter cargo
+  const updatedTransporter = {
+    ...transporter,
+    cargo: (transporter.cargo ?? []).filter((id) => id !== action.bridgeId),
+  };
+
+  // Add bridge placement to board
+  const bridgePlacement = {
+    id: action.bridgeId,
+    position: action.position,
+    placedBy: action.playerId,
+  };
+
+  const updatedUnits = state.units.map((u) =>
+    u.id === transporter.id ? updatedTransporter : u
+  );
+
+  return {
+    ...state,
+    units: updatedUnits,
+    bridges: [...state.bridges, bridgePlacement],
+    actionPoints: state.actionPoints - 1,
+  };
+}
+
+/**
+ * Apply a pickup bridge action to the game state.
+ *
+ * Per rules Section 9:
+ * - Bridge is removed from the board
+ * - Bridge is added to transporter cargo
+ * - Costs 1 AP
+ */
+export function applyPickupBridgeAction(
+  state: GameState,
+  action: { bridgeId: string; transporterId: string; playerId: string }
+): GameState {
+  // Find the transporter
+  const transporter = state.units.find((u) => u.id === action.transporterId);
+  if (!transporter) return state;
+
+  // Check bridge exists on board
+  const bridgeIndex = state.bridges.findIndex((b) => b.id === action.bridgeId);
+  if (bridgeIndex === -1) return state;
+
+  // Add bridge to transporter cargo
+  const updatedTransporter = {
+    ...transporter,
+    cargo: [...(transporter.cargo ?? []), action.bridgeId],
+  };
+
+  // Remove bridge from board
+  const updatedBridges = state.bridges.filter((b) => b.id !== action.bridgeId);
+
+  const updatedUnits = state.units.map((u) =>
+    u.id === transporter.id ? updatedTransporter : u
+  );
+
+  return {
+    ...state,
+    units: updatedUnits,
+    bridges: updatedBridges,
+    actionPoints: state.actionPoints - 1,
+  };
+}
+
+/**
+ * Check and destroy bridges that have lost their land connection.
+ *
+ * Per rules Section 9.3:
+ * - Bridge is destroyed if connecting bridge hex is destroyed
+ * - Bridge is destroyed if connecting land hex is submerged by tide
+ * - All units on destroyed bridges are also destroyed
+ *
+ * Returns updated state with invalid bridges removed and affected units destroyed.
+ */
+export function destroyDisconnectedBridges(state: GameState): GameState {
+  const { validateBridgeConnections } = require('./actions');
+  const validationResults = validateBridgeConnections(state);
+
+  // Find invalid bridge IDs
+  const invalidBridgeIds = validationResults
+    .filter((r) => !r.valid)
+    .map((r) => r.bridgeId);
+
+  if (invalidBridgeIds.length === 0) {
+    return state; // No bridges to destroy
+  }
+
+  // Remove invalid bridges from board
+  const updatedBridges = state.bridges.filter(
+    (b) => !invalidBridgeIds.includes(b.id)
+  );
+
+  // Destroy units on destroyed bridges
+  const destroyedUnitIds: string[] = [];
+  for (const bridgeId of invalidBridgeIds) {
+    const bridge = state.bridges.find((b) => b.id === bridgeId);
+    if (!bridge) continue;
+
+    // Find units at this bridge position
+    const unitsAtBridge = state.units.filter(
+      (u) => u.position?.q === bridge.position.q && u.position?.r === bridge.position.r
+    );
+    destroyedUnitIds.push(...unitsAtBridge.map((u) => u.id));
+  }
+
+  // Remove destroyed units
+  const updatedUnits = state.units.filter(
+    (u) => !destroyedUnitIds.includes(u.id)
+  );
+
+  return {
+    ...state,
+    bridges: updatedBridges,
+    units: updatedUnits,
+  };
+}
