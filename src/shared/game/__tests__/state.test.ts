@@ -28,6 +28,9 @@ import {
   haveAllPlayersDeployed,
   getUndeployedUnits,
   getAstronefHexes,
+  applyPlaceBridgeAction,
+  applyPickupBridgeAction,
+  destroyDisconnectedBridges,
 } from '../state';
 import {
   TerrainType,
@@ -51,6 +54,8 @@ import {
   type EndTurnAction,
   type LandAstronefAction,
   type DeployUnitAction,
+  type PlaceBridgeAction,
+  type PickupBridgeAction,
 } from '../types';
 
 // Helper to create minimal unit for testing
@@ -2250,6 +2255,219 @@ describe('Astronef and Tower Creation', () => {
       const undeployed = getUndeployedUnits(state, 'p1');
 
       expect(undeployed).toHaveLength(0);
+    });
+  });
+
+  // ============================================================================
+  // Bridge Actions (Section 9)
+  // ============================================================================
+
+  describe('applyPlaceBridgeAction', () => {
+    it('should place a bridge from cargo onto the board', () => {
+      const state = createGameState({
+        units: [
+          createUnit('crab-p1-0', UnitType.Crab, 'p1', { q: 5, r: 5 }, {
+            cargo: ['bridge-p1-0'],
+          }),
+        ],
+        bridges: [],
+      });
+
+      const action: PlaceBridgeAction = {
+        type: 'PLACE_BRIDGE',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        bridgeId: 'bridge-p1-0',
+        position: { q: 6, r: 5 },
+        apCost: 1,
+      };
+
+      const newState = applyPlaceBridgeAction(state, action);
+
+      // Bridge should be on board
+      expect(newState.bridges).toHaveLength(1);
+      expect(newState.bridges[0]?.id).toBe('bridge-p1-0');
+      expect(newState.bridges[0]?.position).toEqual({ q: 6, r: 5 });
+      expect(newState.bridges[0]?.placedBy).toBe('p1');
+
+      // Bridge should be removed from cargo
+      const crab = newState.units.find((u) => u.id === 'crab-p1-0');
+      expect(crab?.cargo).toEqual([]);
+
+      // AP should be deducted
+      expect(newState.actionPoints).toBe(14);
+    });
+
+    it('should return unchanged state if bridge not in cargo', () => {
+      const state = createGameState({
+        units: [
+          createUnit('crab-p1-0', UnitType.Crab, 'p1', { q: 5, r: 5 }, {
+            cargo: [],
+          }),
+        ],
+        bridges: [],
+      });
+
+      const action: PlaceBridgeAction = {
+        type: 'PLACE_BRIDGE',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        bridgeId: 'bridge-p1-0',
+        position: { q: 6, r: 5 },
+        apCost: 1,
+      };
+
+      const newState = applyPlaceBridgeAction(state, action);
+
+      expect(newState.bridges).toHaveLength(0);
+      expect(newState.actionPoints).toBe(15);
+    });
+  });
+
+  describe('applyPickupBridgeAction', () => {
+    it('should pick up a bridge from board into cargo', () => {
+      const state = createGameState({
+        units: [
+          createUnit('crab-p1-0', UnitType.Crab, 'p1', { q: 5, r: 5 }, {
+            cargo: [],
+          }),
+        ],
+        bridges: [
+          {
+            id: 'bridge-p1-0',
+            position: { q: 6, r: 5 },
+            placedBy: 'p1',
+          },
+        ],
+      });
+
+      const action: PickupBridgeAction = {
+        type: 'PICKUP_BRIDGE',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        bridgeId: 'bridge-p1-0',
+        transporterId: 'crab-p1-0',
+        apCost: 1,
+      };
+
+      const newState = applyPickupBridgeAction(state, action);
+
+      // Bridge should be removed from board
+      expect(newState.bridges).toHaveLength(0);
+
+      // Bridge should be in cargo
+      const crab = newState.units.find((u) => u.id === 'crab-p1-0');
+      expect(crab?.cargo).toEqual(['bridge-p1-0']);
+
+      // AP should be deducted
+      expect(newState.actionPoints).toBe(14);
+    });
+
+    it('should return unchanged state if bridge not on board', () => {
+      const state = createGameState({
+        units: [
+          createUnit('crab-p1-0', UnitType.Crab, 'p1', { q: 5, r: 5 }, {
+            cargo: [],
+          }),
+        ],
+        bridges: [],
+      });
+
+      const action: PickupBridgeAction = {
+        type: 'PICKUP_BRIDGE',
+        playerId: 'p1',
+        timestamp: Date.now(),
+        bridgeId: 'bridge-p1-0',
+        transporterId: 'crab-p1-0',
+        apCost: 1,
+      };
+
+      const newState = applyPickupBridgeAction(state, action);
+
+      const crab = newState.units.find((u) => u.id === 'crab-p1-0');
+      expect(crab?.cargo).toEqual([]);
+      expect(newState.actionPoints).toBe(15);
+    });
+  });
+
+  describe('destroyDisconnectedBridges', () => {
+    it('should destroy bridges that lost land connection', () => {
+      const state = createGameState({
+        currentTide: TideLevel.High,
+        terrain: [
+          { coord: { q: 5, r: 5 }, type: TerrainType.Sea }, // Always sea
+          { coord: { q: 6, r: 5 }, type: TerrainType.Marsh }, // Becomes sea at high tide
+          { coord: { q: 7, r: 5 }, type: TerrainType.Sea }, // Always sea
+        ],
+        bridges: [
+          {
+            id: 'bridge-p1-0',
+            position: { q: 6, r: 5 }, // No land connection - surrounded by sea/marsh
+            placedBy: 'p1',
+          },
+        ],
+        units: [
+          createUnit('tank-p1-0', UnitType.Tank, 'p1', { q: 6, r: 5 }), // On bridge
+        ],
+      });
+
+      const newState = destroyDisconnectedBridges(state);
+
+      // Bridge should be destroyed
+      expect(newState.bridges).toHaveLength(0);
+
+      // Unit on bridge should also be destroyed
+      expect(newState.units).toHaveLength(0);
+    });
+
+    it('should preserve bridges connected to land', () => {
+      const state = createGameState({
+        currentTide: TideLevel.Normal,
+        terrain: [
+          { coord: { q: 5, r: 5 }, type: TerrainType.Land },
+          { coord: { q: 6, r: 5 }, type: TerrainType.Sea },
+        ],
+        bridges: [
+          {
+            id: 'bridge-p1-0',
+            position: { q: 6, r: 5 }, // Adjacent to land
+            placedBy: 'p1',
+          },
+        ],
+      });
+
+      const newState = destroyDisconnectedBridges(state);
+
+      // Bridge should be preserved
+      expect(newState.bridges).toHaveLength(1);
+    });
+
+    it('should preserve bridges connected via other bridges', () => {
+      const state = createGameState({
+        currentTide: TideLevel.Normal,
+        terrain: [
+          { coord: { q: 5, r: 5 }, type: TerrainType.Land },
+          { coord: { q: 6, r: 5 }, type: TerrainType.Sea },
+          { coord: { q: 7, r: 5 }, type: TerrainType.Sea },
+        ],
+        bridges: [
+          {
+            id: 'bridge-p1-0',
+            position: { q: 6, r: 5 }, // Adjacent to land
+            placedBy: 'p1',
+          },
+          {
+            id: 'bridge-p1-1',
+            position: { q: 7, r: 5 }, // Adjacent to bridge at (6,5), not land directly
+            placedBy: 'p1',
+          },
+        ],
+      });
+
+      const newState = destroyDisconnectedBridges(state);
+
+      // Both bridges should be preserved (chain from land)
+      expect(newState.bridges).toHaveLength(2);
     });
   });
 });
