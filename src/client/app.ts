@@ -539,21 +539,44 @@ export class GameApp {
     }));
 
     if (data.roomState === 'playing' && data.gameState) {
-      // Restore game state
+      // Restore game state from server (authoritative)
       this.isInLobby = false;
       this.gameState = data.gameState;
+
+      // Clear any local optimistic state - server is now source of truth
+      this.clearTurnActionHistory();
+      this.selectedUnit = null;
+      this.movementPreviewDestination = null;
+      this.movementPreviewPath = [];
+      this.movementPreviewAPCost = 0;
+
+      // Clear visual highlights and selections
+      this.renderer?.clearHighlights?.();
+      this.renderer?.clearUnitSelections?.();
 
       // Make sure we're in game mode
       if (this.hud.isLobbyMode()) {
         this.hud.enterGameMode();
         this.initializePlayerColors();
         this.initializeDeploymentInventory();
+        this.hud.showActionHistory();
         this.hud.showScoreboard();
         this.hud.showMineralStats();
+        this.hud.showTurnOrder();
       }
 
+      // Full state sync - update all UI elements
       this.updateGameState(data.gameState);
+      this.updateScoreboard();
+      this.updateMineralStatsDisplay();
+      this.updateTurnOrder();
+      this.updateUnderFireZones();
+
       this.hud.showMessage('Reconnected to game!', 3000);
+    } else if (data.roomState === 'ready') {
+      // Game is ready but not started yet
+      this.hud.updatePlayerList(this.lobbyPlayers);
+      this.hud.showMessage('Reconnected! Game ready to start.', 2000);
     } else {
       // Still in lobby
       this.hud.updatePlayerList(this.lobbyPlayers);
