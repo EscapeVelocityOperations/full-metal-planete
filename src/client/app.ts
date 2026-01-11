@@ -77,6 +77,10 @@ export class GameApp {
   private replayControls: ReplayControls | null = null;
   private isReplayMode: boolean = false;
 
+  // Reconnection state
+  private reconnectStatusInterval: number | null = null;
+  private reconnectStatusElement: HTMLElement | null = null;
+
   constructor(canvas: HTMLCanvasElement, config: GameConfig) {
     this.canvas = canvas;
     this.config = config;
@@ -138,15 +142,19 @@ export class GameApp {
   private setupEventHandlers(): void {
     this.client.on('connected', () => {
       console.log('Game client connected');
+      // Clear reconnection UI on successful connection
+      this.stopReconnectionStatus();
     });
 
     this.client.on('disconnected', () => {
       console.log('Game client disconnected');
       this.hud.showMessage('Disconnected - attempting to reconnect...', 5000);
+      this.startReconnectionStatus();
     });
 
     this.client.on('reconnected', (data: { gameState: GameState; players: any[]; roomState: string }) => {
       console.log('Reconnected to game', data);
+      this.stopReconnectionStatus();
       this.handleReconnected(data);
     });
 
@@ -197,7 +205,14 @@ export class GameApp {
 
     this.client.on('error', (error: { code: string; message: string }) => {
       console.error('Game error', error);
-      this.hud.showMessage(`Error: ${error.message}`, 5000);
+
+      // Special handling for reconnection failure
+      if (error.code === 'RECONNECT_FAILED') {
+        this.stopReconnectionStatus();
+        this.hud.showMessage('Connection failed. Please refresh the page.', 10000);
+      } else {
+        this.hud.showMessage(`Error: ${error.message}`, 5000);
+      }
     });
 
     this.client.on('liftOffDecisionAck', (data: LiftOffDecisionAck) => {
@@ -2452,9 +2467,108 @@ export class GameApp {
   }
 
   /**
+   * Show reconnection status indicator with live updates
+   */
+  private startReconnectionStatus(): void {
+    // Don't create duplicate status displays
+    if (this.reconnectStatusElement) {
+      return;
+    }
+
+    // Inject styles if not already present
+    if (!document.getElementById('reconnection-status-styles')) {
+      const style = document.createElement('style');
+      style.id = 'reconnection-status-styles';
+      style.textContent = `
+        .reconnection-status {
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          background: rgba(0, 0, 0, 0.85);
+          color: #fff;
+          padding: 12px 16px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          font-family: system-ui, -apple-system, sans-serif;
+          font-size: 14px;
+          z-index: 10000;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          border: 1px solid rgba(255, 200, 0, 0.5);
+        }
+
+        .reconnection-spinner {
+          width: 18px;
+          height: 18px;
+          border: 2px solid rgba(255, 200, 0, 0.3);
+          border-top-color: #ffc800;
+          border-radius: 50%;
+          animation: reconnect-spin 1s linear infinite;
+        }
+
+        @keyframes reconnect-spin {
+          to { transform: rotate(360deg); }
+        }
+
+        .reconnection-status.visible {
+          animation: reconnect-fade-in 0.3s ease-out;
+        }
+
+        @keyframes reconnect-fade-in {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const statusElement = document.createElement('div');
+    statusElement.id = 'reconnection-status';
+    statusElement.className = 'reconnection-status visible';
+    statusElement.innerHTML = `
+      <div class="reconnection-spinner"></div>
+      <span class="reconnection-text">Reconnecting...</span>
+    `;
+    document.body.appendChild(statusElement);
+    this.reconnectStatusElement = statusElement;
+
+    // Update the status display every second
+    this.reconnectStatusInterval = window.setInterval(() => {
+      const attempt = this.client.getReconnectAttempts();
+      const isReconnecting = this.client.isReconnectingState();
+      const text = statusElement.querySelector('.reconnection-text') as HTMLElement;
+
+      if (text) {
+        if (isReconnecting) {
+          text.textContent = `Reconnecting... (attempt ${attempt})`;
+        } else {
+          text.textContent = 'Connection lost - waiting to reconnect...';
+        }
+      }
+    }, 1000);
+  }
+
+  /**
+   * Stop and remove reconnection status indicator
+   */
+  private stopReconnectionStatus(): void {
+    if (this.reconnectStatusInterval) {
+      clearInterval(this.reconnectStatusInterval);
+      this.reconnectStatusInterval = null;
+    }
+
+    if (this.reconnectStatusElement) {
+      this.reconnectStatusElement.remove();
+      this.reconnectStatusElement = null;
+    }
+  }
+
+  /**
    * Clean up resources
    */
   destroy(): void {
+    this.stopReconnectionStatus();
     this.hud.destroy();
     this.client.disconnect();
     this.audio.destroy();
