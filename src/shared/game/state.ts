@@ -31,7 +31,7 @@ import {
   type CaptureAstronefAction,
   type RebuildTowerAction,
 } from './types';
-import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP } from './actions';
+import { getBaseActionPoints, calculateTotalActionPoints, calculateSavedAP, validateBridgeConnections } from './actions';
 import { hexKey, hexNeighbors, hexEqual } from './hex';
 import { generateMinerals } from './map-generator';
 import { isUnitStuck, isUnitGrounded, getEffectiveTerrain, canAstronefLandOn, canUnitEnterTerrain } from './terrain';
@@ -572,6 +572,8 @@ export function advanceTurn(state: GameState): GameState {
     newState = drawTideCard(newState);
     // Update stuck status for all units after tide changes
     newState = updateUnitsStuckStatus(newState);
+    // Destroy bridges that lost their land connection due to tide change
+    newState = destroyDisconnectedBridges(newState);
   }
 
   return newState;
@@ -2116,7 +2118,6 @@ export function applyPickupBridgeAction(
  * Returns updated state with invalid bridges removed and affected units destroyed.
  */
 export function destroyDisconnectedBridges(state: GameState): GameState {
-  const { validateBridgeConnections } = require('./actions');
   const validationResults = validateBridgeConnections(state);
 
   // Find invalid bridge IDs
